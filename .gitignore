@@ -6,9 +6,10 @@
 *.key
 certificates/
 
-# Runtime data - track source files, ignore databases
+# Runtime data - track source files, ignore databases and DLQ persistence
 data/*.db
 data/*.sqlite
+data/dlq/
 logs/
 *.db
 shadow_trades.log
