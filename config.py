@@ -4,6 +4,7 @@ import os
 import stat
 import time
 from decimal import Decimal
+from typing import Any
 
 import certifi
 import requests
@@ -117,7 +118,7 @@ class Config:
                 )
             finally:
                 for i in range(len(key_data)):
-                    key_data = key_data[:i] + b'\x00' + key_data[i+1:]
+                    key_data = key_data[:i] + b"\x00" + key_data[i + 1 :]
                 del key_data
 
         if not isinstance(cls._private_key, rsa.RSAPrivateKey):
@@ -175,13 +176,14 @@ class Config:
             cls._session = requests.Session()
             cls._session.verify = certifi.where()
             adapter = requests.adapters.HTTPAdapter(
-                pool_connections=10, pool_maxsize=20,
+                pool_connections=10,
+                pool_maxsize=20,
             )
             cls._session.mount("https://", adapter)
         return cls._session
 
     @classmethod
-    def request_with_retry(cls, method: str, url: str, **kwargs):
+    def request_with_retry(cls, method: str, url: str, **kwargs: Any) -> requests.Response:
         max_attempts = int(kwargs.pop("max_attempts", cls.RETRY_MAX_ATTEMPTS))
         backoff = float(kwargs.pop("backoff", cls.RETRY_BACKOFF_SEC))
         rate_limiter_tier = kwargs.pop("rate_limiter_tier", None)
@@ -196,6 +198,7 @@ class Config:
         if rate_limiter_tier:
             try:
                 from resilience.rate_limiter import get_rate_limiter
+
                 if not get_rate_limiter().acquire(rate_limiter_tier, timeout=30.0):
                     raise RuntimeError(f"Rate limiter timeout for tier {rate_limiter_tier}")
             except RuntimeError:
@@ -219,7 +222,7 @@ class Config:
         raise RuntimeError(f"Request failed after {max_attempts} attempts: {url}")
 
     @classmethod
-    def validate(cls):
+    def validate(cls) -> None:
         if os.getenv("KALSHI_TESTING") == "1":
             return
         if not cls.API_KEY_ID:

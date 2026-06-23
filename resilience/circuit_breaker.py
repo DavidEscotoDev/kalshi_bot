@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import threading
 import time
@@ -9,12 +11,13 @@ from typing import Any
 logger = logging.getLogger("kalshi_bot.circuit_breaker")
 
 
-def _update_cb_metric(name: str, state: str):
+def _update_cb_metric(name: str, state: str) -> None:
     try:
         from observability.metrics import update_circuit_breaker_state as _fn
+
         _fn(name, state)
     except Exception:
-        pass
+        logger.debug("Failed to update circuit breaker metric", exc_info=True)
 
 
 class CircuitBreakerState(Enum):
@@ -28,7 +31,7 @@ class CircuitBreakerConfig:
     failure_threshold: int = 5
     success_threshold: int = 2
     timeout_seconds: float = 30.0
-    excluded_exceptions: tuple = ()
+    excluded_exceptions: tuple[Any, ...] = ()
 
 
 @dataclass
@@ -55,19 +58,21 @@ class CircuitBreaker:
     @property
     def state(self) -> CircuitBreakerState:
         with self._lock:
-            if self._state == CircuitBreakerState.OPEN:
-                if time.time() - self._last_state_change >= self.config.timeout_seconds:
-                    self._transition_to_half_open()
+            if (
+                self._state == CircuitBreakerState.OPEN
+                and time.time() - self._last_state_change >= self.config.timeout_seconds
+            ):
+                self._transition_to_half_open()
             return self._state
 
-    def _transition_to_open(self):
+    def _transition_to_open(self) -> None:
         self._state = CircuitBreakerState.OPEN
         self._last_state_change = time.time()
         self._stats.state_changes += 1
         _update_cb_metric(self.name, "open")
         logger.warning(f"Circuit breaker '{self.name}' transitioned to OPEN")
 
-    def _transition_to_half_open(self):
+    def _transition_to_half_open(self) -> None:
         self._state = CircuitBreakerState.HALF_OPEN
         self._last_state_change = time.time()
         self._stats.state_changes += 1
@@ -75,7 +80,7 @@ class CircuitBreaker:
         _update_cb_metric(self.name, "half_open")
         logger.info(f"Circuit breaker '{self.name}' transitioned to HALF_OPEN")
 
-    def _transition_to_closed(self):
+    def _transition_to_closed(self) -> None:
         self._state = CircuitBreakerState.CLOSED
         self._last_state_change = time.time()
         self._stats.state_changes += 1
@@ -84,7 +89,9 @@ class CircuitBreaker:
         _update_cb_metric(self.name, "closed")
         logger.info(f"Circuit breaker '{self.name}' transitioned to CLOSED")
 
-    def call(self, func: Callable[..., Any], *args, bypass=False, **kwargs) -> Any:
+    def call(
+        self, func: Callable[..., Any], *args: Any, bypass: bool = False, **kwargs: Any
+    ) -> Any:
         if bypass:
             return func(*args, **kwargs)
         if self.state == CircuitBreakerState.OPEN:
@@ -103,43 +110,45 @@ class CircuitBreaker:
             self._on_failure()
             raise
 
-    def _on_success(self):
+    def _on_success(self) -> None:
         with self._lock:
             self._stats.successful_calls += 1
             self._stats.consecutive_failures = 0
             self._stats.consecutive_successes += 1
             self._stats.last_success_time = time.time()
 
-            if self._state == CircuitBreakerState.HALF_OPEN:
-                if self._stats.consecutive_successes >= self.config.success_threshold:
-                    self._transition_to_closed()
+            if (
+                self._state == CircuitBreakerState.HALF_OPEN
+                and self._stats.consecutive_successes >= self.config.success_threshold
+            ):
+                self._transition_to_closed()
 
-    def _on_failure(self):
+    def _on_failure(self) -> None:
         with self._lock:
             self._stats.failed_calls += 1
             self._stats.consecutive_failures += 1
             self._stats.consecutive_successes = 0
             self._stats.last_failure_time = time.time()
 
-            if self._state == CircuitBreakerState.HALF_OPEN:
+            if self._state == CircuitBreakerState.HALF_OPEN or (
+                self._state == CircuitBreakerState.CLOSED
+                and self._stats.consecutive_failures >= self.config.failure_threshold
+            ):
                 self._transition_to_open()
-            elif self._state == CircuitBreakerState.CLOSED:
-                if self._stats.consecutive_failures >= self.config.failure_threshold:
-                    self._transition_to_open()
 
-    def record_failure(self):
+    def record_failure(self) -> None:
         with self._lock:
             self._stats.failed_calls += 1
             self._stats.consecutive_failures += 1
             self._stats.consecutive_successes = 0
             self._stats.last_failure_time = time.time()
-            if self._state == CircuitBreakerState.HALF_OPEN:
+            if self._state == CircuitBreakerState.HALF_OPEN or (
+                self._state == CircuitBreakerState.CLOSED
+                and self._stats.consecutive_failures >= self.config.failure_threshold
+            ):
                 self._transition_to_open()
-            elif self._state == CircuitBreakerState.CLOSED:
-                if self._stats.consecutive_failures >= self.config.failure_threshold:
-                    self._transition_to_open()
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, Any]:
         with self._lock:
             return {
                 "name": self.name,
@@ -154,7 +163,7 @@ class CircuitBreaker:
                 "state_changes": self._stats.state_changes,
             }
 
-    def reset(self):
+    def reset(self) -> None:
         with self._lock:
             self._state = CircuitBreakerState.CLOSED
             self._stats = CircuitBreakerStats()
@@ -167,15 +176,15 @@ class CircuitBreakerOpenError(Exception):
 
 
 class CircuitBreakerRegistry:
+    _breakers: dict[str, CircuitBreaker] = {}
     _instance = None
     _lock = threading.Lock()
 
-    def __new__(cls):
+    def __new__(cls) -> CircuitBreakerRegistry:
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
                     cls._instance = super().__new__(cls)
-                    cls._instance._breakers = {}
         return cls._instance
 
     def get_or_create(
@@ -190,11 +199,11 @@ class CircuitBreakerRegistry:
         with self._lock:
             return self._breakers.get(name)
 
-    def get_all_stats(self) -> dict:
+    def get_all_stats(self) -> dict[str, Any]:
         with self._lock:
             return {name: cb.get_stats() for name, cb in self._breakers.items()}
 
-    def reset_all(self):
+    def reset_all(self) -> None:
         with self._lock:
             for cb in self._breakers.values():
                 cb.reset()

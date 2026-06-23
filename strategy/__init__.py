@@ -1,18 +1,18 @@
 from strategy.forecast_provider import (
+    AlphaVantageEconomicProvider,
     EconomicDataProvider,
     ForecastProvider,
     FredSurveyForecastProvider,
     TrailingAverageForecastProvider,
-    AlphaVantageEconomicProvider,
-    scale_conviction,
-    compute_surprise_std,
     compute_signal_quality,
+    compute_surprise_std,
+    scale_conviction,
 )
 from strategy.macro_tracker import (
-    MacroTrackerStrategy,
     CalendarProvider,
-    MockCalendarProvider,
     FredCalendarProvider,
+    MacroTrackerStrategy,
+    MockCalendarProvider,
     _evaluate_and_place,
 )
 

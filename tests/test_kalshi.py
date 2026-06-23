@@ -4,6 +4,7 @@ os.environ["KALSHI_TESTING"] = "1"
 
 import sys
 from decimal import Decimal
+from typing import Any
 
 import pytest
 
@@ -19,7 +20,7 @@ from safety.risk_manager import RiskManager
 from strategy.macro_tracker import MockCalendarProvider
 
 
-def test_fixed_point_formatting():
+def test_fixed_point_formatting() -> None:
     """
     Test Phase 3 Execution payload requirements.
     Prices must have 4 decimal places, quantities 2 decimal places.
@@ -35,19 +36,22 @@ def test_fixed_point_formatting():
     assert engine.format_quantity(Decimal("0.25")) == "0"
 
 
-def test_prod_ws_url_uses_supported_endpoint():
+def test_prod_ws_url_uses_supported_endpoint() -> None:
     """
     Production websocket connections should use the external-api-ws endpoint.
     """
     original_env = Config.ENV
     Config.ENV = "prod"
     try:
-        assert Config.get_ws_url() == f"wss://external-api-ws.kalshi.com/trade-api/ws/{Config.API_VERSION}"
+        assert (
+            Config.get_ws_url()
+            == f"wss://external-api-ws.kalshi.com/trade-api/ws/{Config.API_VERSION}"
+        )
     finally:
         Config.ENV = original_env
 
 
-def test_fee_accumulator_and_rebates():
+def test_fee_accumulator_and_rebates() -> None:
     """
     Test Phase 3 Fee rounding accumulator and rebate rules.
     Accumulated overpayments must trigger a whole-cent rebate once they reach $0.01.
@@ -79,7 +83,7 @@ def test_fee_accumulator_and_rebates():
     assert tracker.total_rebates_received == Decimal("0.01")
 
 
-def test_risk_manager_kelly_sizing():
+def test_risk_manager_kelly_sizing() -> None:
     """
     Test Phase 4 Kelly Criterion calculations and Fractional/VaR caps.
     """
@@ -105,7 +109,7 @@ def test_risk_manager_kelly_sizing():
     assert final_fraction_yes == Decimal("0.02")
 
 
-def test_sector_concentration():
+def test_sector_concentration() -> None:
     """
     Test Phase 4 Sector Concentration limits.
     Max exposure per sector is capped at 30% of total capital.
@@ -140,7 +144,7 @@ def test_sector_concentration():
     assert wager2 == Decimal("100.00")
 
 
-def test_order_book_synthetic_asks():
+def test_order_book_synthetic_asks() -> None:
     """
     Test Phase 2 Reciprocal pricing and synthetic ask levels:
     YES Ask Price = 1.00 - NO Bid Price
@@ -148,7 +152,7 @@ def test_order_book_synthetic_asks():
     """
     book = LocalOrderBook(max_depth=3)  # Limit depth to 3 for testing
 
-    snapshot = {
+    snapshot: dict[str, Any] = {
         "type": "orderbook_snapshot",
         "msg": {
             "market_ticker": "FED-26",
@@ -213,7 +217,7 @@ def test_order_book_synthetic_asks():
     ]
 
 
-def test_shadow_mode_interception():
+def test_shadow_mode_interception() -> None:
     """
     Test Phase 1: Live Shadowing Mode.
     Ensures that when SHADOW_MODE is True, placing an order does not call REST API,
@@ -227,6 +231,7 @@ def test_shadow_mode_interception():
     initialize_db()
 
     from execution.engine import _close_shadow_logger
+
     _close_shadow_logger()
 
     shadow_log_path = os.path.abspath(
@@ -268,7 +273,7 @@ def test_shadow_mode_interception():
         os.remove(shadow_log_path)
 
 
-def test_database_logging():
+def test_database_logging() -> None:
     """
     Test Phase 3 SQLite database storage.
     """
@@ -313,7 +318,7 @@ def test_database_logging():
     conn.close()
 
 
-def test_macro_strategy_trigger():
+def test_macro_strategy_trigger() -> None:
     """
     Test Phase 2 Macroeconomic Strategy Trigger Logic.
     """
@@ -326,7 +331,7 @@ def test_macro_strategy_trigger():
     execution_engine = ExecutionEngine()
     order_book = LocalOrderBook()
 
-    snapshot = {
+    snapshot: dict[str, Any] = {
         "type": "orderbook_snapshot",
         "msg": {
             "market_ticker": "FED-MOCK",
@@ -376,6 +381,7 @@ def test_macro_strategy_trigger():
 
     Config.SHADOW_MODE = original_shadow_mode
     from execution.engine import _close_shadow_logger
+
     _close_shadow_logger()
     shadow_log_path = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "logs", "shadow_trades.log")
@@ -384,12 +390,13 @@ def test_macro_strategy_trigger():
         os.remove(shadow_log_path)
 
 
-def test_shadow_log_redirection():
+def test_shadow_log_redirection() -> None:
     """
     Test Phase 1: Verify that logging redirects correctly to logs/shadow_trades.log
     """
 
     from execution.engine import _close_shadow_logger
+
     _close_shadow_logger()
 
     original_shadow_mode = Config.SHADOW_MODE
@@ -421,12 +428,13 @@ def test_shadow_log_redirection():
 
     Config.SHADOW_MODE = original_shadow_mode
     from execution.engine import _close_shadow_logger
+
     _close_shadow_logger()
     if os.path.exists(shadow_log_path):
         os.remove(shadow_log_path)
 
 
-def test_main_daemon_loop_mock():
+def test_main_daemon_loop_mock() -> None:
     """
     Test continuous main.py loop behavior by running it in a mocked state.
     """
@@ -437,7 +445,7 @@ def test_main_daemon_loop_mock():
     os.environ["KALSHI_TESTING"] = "1"
     main.running = True
 
-    def stop_loop_after_one_iteration(*args, **kwargs):
+    def stop_loop_after_one_iteration(*args: object, **kwargs: object) -> bool:
         main.running = False
         main._shutdown_event.set()
         return True

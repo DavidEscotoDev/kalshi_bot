@@ -1,24 +1,26 @@
 import logging
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
+from typing import Any
 
 logger = logging.getLogger("kalshi_bot.fee_tracker")
 
+
 class FeeAccumulatorTracker:
-    def __init__(self):
+    def __init__(self) -> None:
         self.accumulator = Decimal("0.000000")
         self.total_overpayments = Decimal("0.000000")
         self.total_rebates_received = Decimal("0.000000")
 
-    def reset(self):
+    def reset(self) -> None:
         self.accumulator = Decimal("0.000000")
         self.total_overpayments = Decimal("0.000000")
         self.total_rebates_received = Decimal("0.000000")
 
-    def record_fill(self, price: Decimal, quantity: Decimal, is_buy: bool = True) -> dict:
+    def record_fill(self, price: Decimal, quantity: Decimal, is_buy: bool = True) -> dict[str, Any]:
         """
         Calculates exact fill cost, rounded cost (whole-cents), and tracks overpayment.
         Triggers rebates when the accumulated overpayments reach or exceed $0.01.
-        
+
         Returns:
             dict containing details of the calculation:
             - actual_value: exact price * quantity
@@ -68,5 +70,5 @@ class FeeAccumulatorTracker:
             "rounded_value": rounded_value,
             "overpayment": overpayment,
             "rebate_received": rebate_received,
-            "new_accumulator_balance": self.accumulator
+            "new_accumulator_balance": self.accumulator,
         }

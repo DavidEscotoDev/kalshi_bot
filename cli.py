@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-import sys
-import time
 import argparse
 import logging
 import re
+import sys
+import time
 from decimal import Decimal
+
 from config import Config
-from safety.kill_switch import KillSwitch
-from safety.risk_manager import RiskManager
+from data.database import get_strategy_performance_summary, initialize_db
+from execution.engine import ExecutionEngine
 from market.order_book import LocalOrderBook
 from market.websocket_client import KalshiWebSocketClient
-from execution.engine import ExecutionEngine
-from data.database import initialize_db
+from safety.kill_switch import KillSwitch
+from safety.risk_manager import RiskManager
 from strategy.macro_tracker import MockCalendarProvider
 
 logging.basicConfig(
@@ -40,7 +41,7 @@ def validate_sector(sector: str) -> str:
     return sector
 
 
-def run_kill_switch():
+def run_kill_switch() -> None:
     print("\n" + "=" * 50)
     print("      MANUAL KILL SWITCH INITIATION")
     print("=" * 50)
@@ -54,7 +55,7 @@ def run_kill_switch():
     print("=" * 50 + "\n")
 
 
-def view_order_book(ticker: str):
+def view_order_book(ticker: str) -> None:
     ticker = validate_ticker(ticker)
     print("\n" + "=" * 50)
     print(f"  CONNECTING TO REAL-TIME ORDER BOOK: {ticker}")
@@ -62,7 +63,7 @@ def view_order_book(ticker: str):
 
     order_book = LocalOrderBook()
 
-    def display_book(book: LocalOrderBook):
+    def display_book(book: LocalOrderBook) -> None:
         print("\n\033[H\033[J")
         print("=" * 60)
         print(f" ORDER BOOK FOR: {ticker}")
@@ -72,9 +73,7 @@ def view_order_book(ticker: str):
         yes_asks = book.get_yes_asks()
 
         print("\n--- YES CONTRACT BOOK ---")
-        print(
-            f"{'Bid Qty':>12} | {'Bid Price':>10} || {'Ask Price':>10} | {'Ask Qty':>12}"
-        )
+        print(f"{'Bid Qty':>12} | {'Bid Price':>10} || {'Ask Price':>10} | {'Ask Qty':>12}")
         print("-" * 60)
 
         max_rows = min(10, max(len(yes_bids), len(yes_asks)))
@@ -99,7 +98,8 @@ def view_order_book(ticker: str):
         best_yes_ask, _ = book.get_best_yes_ask()
         print("-" * 60)
         print(
-            f"Best YES Bid: ${best_yes_bid if best_yes_bid else 'N/A'} | Best YES Ask: ${best_yes_ask if best_yes_ask else 'N/A'}"
+            f"Best YES Bid: ${best_yes_bid if best_yes_bid else 'N/A'} | "
+            f"Best YES Ask: ${best_yes_ask if best_yes_ask else 'N/A'}"
         )
         print("=" * 60)
         print("\nPress Ctrl+C to exit.")
@@ -116,7 +116,7 @@ def view_order_book(ticker: str):
         print("Done.")
 
 
-def test_diagnostics():
+def test_diagnostics() -> None:
     print("\n" + "=" * 50)
     print("      SYSTEM DIAGNOSTICS & SIGNING CHECK")
     print("=" * 50)
@@ -128,7 +128,7 @@ def test_diagnostics():
         print(f"   WS URL: {Config.get_ws_url()}")
 
         print("\n2. Verification of Private RSA Key Loading...")
-        private_key = Config.get_private_key()
+        Config.get_private_key()
         print("   RSA Private Key successfully parsed.")
 
         print("\n3. Testing REST API connection and signature authentication...")
@@ -148,7 +148,7 @@ def test_diagnostics():
     print("=" * 50 + "\n")
 
 
-def view_historical_cutoff():
+def view_historical_cutoff() -> None:
     print("\n" + "=" * 50)
     print("       HISTORICAL DATA CUTOFF TIMESTAMPS")
     print("=" * 50)
@@ -172,9 +172,7 @@ def view_historical_cutoff():
             print(f"Trades Created Cutoff:   {data.get('trades_created_ts')}")
             print(f"Orders Updated Cutoff:   {data.get('orders_updated_ts')}")
         else:
-            print(
-                f"API Error ({response.status_code}): {response.text}", file=sys.stderr
-            )
+            print(f"API Error ({response.status_code}): {response.text}", file=sys.stderr)
     except Exception as e:
         print(f"Error fetching historical cutoff: {e}", file=sys.stderr)
     print("=" * 50 + "\n")
@@ -187,7 +185,7 @@ def trigger_macro_release(
     previous: float,
     ticker: str,
     sector: str,
-):
+) -> None:
     ticker = validate_ticker(ticker)
     sector = validate_sector(sector)
 
@@ -225,7 +223,49 @@ def trigger_macro_release(
     print("=" * 50 + "\n")
 
 
-def run_trading_bot(ticker: str, sector: str, sim_prob: float):
+def show_performance_report(indicator: str | None = None) -> None:
+    print("\n" + "=" * 65)
+    print("      STRATEGY PERFORMANCE REPORT")
+    print("=" * 65)
+    rows = get_strategy_performance_summary(indicator)
+    if not rows:
+        print("No performance data available yet.")
+        print("=" * 65 + "\n")
+        return
+
+    header = (
+        f"{'Indicator':<14} {'Signals':>8} {'Wins':>6} {'Losses':>7} "
+        f"{'Win Rate':>9}   {'Avg Sigma':>7} {'Avg Conv':>9} {'Total Wager':>12}"
+    )
+    print(header)
+    print("-" * 65)
+
+    totals = {"signals": 0, "wins": 0, "losses": 0}
+    for r in rows:
+        total = r["total_signals"]
+        wins = r["wins"]
+        losses = r["losses"]
+        win_rate = (wins / (wins + losses) * 100) if (wins + losses) > 0 else 0.0
+        totals["signals"] += total
+        totals["wins"] += wins
+        totals["losses"] += losses
+        print(
+            f"{r['indicator']:<14} {total:>8} {wins:>6} {losses:>7} "
+            f"{win_rate:>7.1f}%   {r['avg_sigma']:>7} {r['avg_conviction']:>9} "
+            f"${r['total_wager']:>10,.2f}"
+        )
+
+    print("-" * 65)
+    t = totals
+    tr = (t["wins"] / (t["wins"] + t["losses"]) * 100) if (t["wins"] + t["losses"]) > 0 else 0.0
+    print(
+        f"{'TOTAL':<14} {t['signals']:>8} {t['wins']:>6} {t['losses']:>7} "
+        f"{tr:>7.1f}%"
+    )
+    print("=" * 65 + "\n")
+
+
+def run_trading_bot(ticker: str, sector: str, sim_prob: float) -> None:
     ticker = validate_ticker(ticker)
     sector = validate_sector(sector)
 
@@ -264,7 +304,8 @@ def run_trading_bot(ticker: str, sector: str, sim_prob: float):
 
             mid_price = (best_bid_price + best_ask_price) / Decimal("2.0")
             logger.info(
-                f"Market Status - Best Bid: ${best_bid_price:.4f}, Best Ask: ${best_ask_price:.4f}, Mid: ${mid_price:.4f}"
+                f"Market Status - Best Bid: ${best_bid_price:.4f}, "
+                f"Best Ask: ${best_ask_price:.4f}, Mid: ${mid_price:.4f}"
             )
 
             total_capital = balance
@@ -283,16 +324,16 @@ def run_trading_bot(ticker: str, sector: str, sim_prob: float):
                 if wager > 0:
                     quantity = wager / price_to_buy
                     logger.info(
-                        f"SIGNAL DETECTED: BUY YES at ${price_to_buy:.4f}. Suggested Wager: ${wager:.2f} ({quantity:.2f} contracts)"
+                        f"SIGNAL DETECTED: BUY YES at ${price_to_buy:.4f}. "
+                        f"Suggested Wager: ${wager:.2f} ({quantity:.2f} contracts)"
                     )
                     payload = execution_engine.format_price(price_to_buy)
                     qty_payload = execution_engine.format_quantity(quantity)
                     logger.info(
-                        f"[SIMULATED EXECUTION] Sending JSON -> Price: '{payload}', Count: '{qty_payload}'"
+                        f"[SIMULATED EXECUTION] Sending JSON -> "
+                        f"Price: '{payload}', Count: '{qty_payload}'"
                     )
-                    execution_engine.handle_order_fill(
-                        price_to_buy, quantity, is_buy=True
-                    )
+                    execution_engine.handle_order_fill(price_to_buy, quantity, is_buy=True)
             elif sim_probability < best_bid_price:
                 no_price = Decimal("1.0000") - best_bid_price
                 wager = risk_manager.size_order(
@@ -306,18 +347,18 @@ def run_trading_bot(ticker: str, sector: str, sim_prob: float):
                 if wager > 0:
                     quantity = wager / no_price
                     logger.info(
-                        f"SIGNAL DETECTED: BUY NO at ${no_price:.4f}. Suggested Wager: ${wager:.2f} ({quantity:.2f} contracts)"
+                        f"SIGNAL DETECTED: BUY NO at ${no_price:.4f}. "
+                        f"Suggested Wager: ${wager:.2f} ({quantity:.2f} contracts)"
                     )
                     payload = execution_engine.format_price(no_price)
                     qty_payload = execution_engine.format_quantity(quantity)
                     logger.info(
-                        f"[SIMULATED EXECUTION] Sending JSON -> Price: '{payload}', Count: '{qty_payload}'"
+                        f"[SIMULATED EXECUTION] Sending JSON -> "
+                        f"Price: '{payload}', Count: '{qty_payload}'"
                     )
                     execution_engine.handle_order_fill(no_price, quantity, is_buy=True)
             else:
-                logger.info(
-                    "Estimated probability is within bid-ask spread. No trade action."
-                )
+                logger.info("Estimated probability is within bid-ask spread. No trade action.")
 
             time.sleep(10)
     except KeyboardInterrupt:
@@ -327,7 +368,7 @@ def run_trading_bot(ticker: str, sector: str, sim_prob: float):
         logger.info("Bot shutdown complete.")
 
 
-def main():
+def main() -> None:
     initialize_db()
 
     parser = argparse.ArgumentParser(
@@ -335,15 +376,11 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="command", help="System sub-commands")
 
-    run_parser = subparsers.add_parser(
-        "run-bot", help="Run the algorithmic trading bot"
-    )
+    run_parser = subparsers.add_parser("run-bot", help="Run the algorithmic trading bot")
     run_parser.add_argument(
         "--ticker", required=True, help="Kalshi market ticker (e.g. FED-24DEC-T4.00)"
     )
-    run_parser.add_argument(
-        "--sector", required=True, help="Concentration sector (e.g. Economics)"
-    )
+    run_parser.add_argument("--sector", required=True, help="Concentration sector (e.g. Economics)")
     run_parser.add_argument(
         "--prob",
         type=float,
@@ -364,9 +401,7 @@ def main():
         "test-diagnostics", help="Run client diagnostics and authentication tests"
     )
 
-    subparsers.add_parser(
-        "view-cutoff", help="Retrieve historical data cutoff timestamps"
-    )
+    subparsers.add_parser("view-cutoff", help="Retrieve historical data cutoff timestamps")
 
     mock_parser = subparsers.add_parser(
         "trigger-mock-release", help="Trigger a mock macroeconomic release to trade on"
@@ -377,20 +412,23 @@ def main():
         choices=["FOMC", "CPI", "PCE"],
         help="Macro indicator type",
     )
-    mock_parser.add_argument(
-        "--actual", type=float, required=True, help="Actual indicator value"
-    )
+    mock_parser.add_argument("--actual", type=float, required=True, help="Actual indicator value")
     mock_parser.add_argument(
         "--forecast", type=float, required=True, help="Forecasted indicator value"
     )
-    mock_parser.add_argument(
-        "--previous", type=float, default=0.0, help="Previous indicator value"
-    )
+    mock_parser.add_argument("--previous", type=float, default=0.0, help="Previous indicator value")
     mock_parser.add_argument(
         "--ticker", default="FED-MOCK", help="Simulated market ticker to target"
     )
-    mock_parser.add_argument(
-        "--sector", default="Economics", help="Concentration sector"
+    mock_parser.add_argument("--sector", default="Economics", help="Concentration sector")
+
+    perf_parser = subparsers.add_parser(
+        "perf-report", help="Show strategy performance summary from database"
+    )
+    perf_parser.add_argument(
+        "--indicator",
+        choices=["CPI", "PCE", "FOMC"],
+        help="Filter by indicator",
     )
 
     args = parser.parse_args()
@@ -414,6 +452,8 @@ def main():
             ticker=args.ticker,
             sector=args.sector,
         )
+    elif args.command == "perf-report":
+        show_performance_report(indicator=args.indicator)
     else:
         parser.print_help()
 

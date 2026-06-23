@@ -3,6 +3,7 @@ import logging
 import os
 import threading
 import time
+from typing import Any
 
 logger = logging.getLogger("kalshi_bot.audit_log")
 
@@ -24,7 +25,7 @@ class AuditLogger:
         audit_dir = self._ensure_dir()
         return os.path.join(audit_dir, f"audit-{today}.log")
 
-    def log(self, event_type: str, ticker: str, action: str, **extra) -> None:
+    def log(self, event_type: str, ticker: str, action: str, **extra: Any) -> None:
         with self._lock:
             path = self._log_path()
             record = {
@@ -45,7 +46,7 @@ class AuditLogger:
         outcome_side: str,
         price: float,
         quantity: float,
-        **extra,
+        **extra: Any,
     ) -> None:
         self.log(
             "order_placed",
@@ -66,7 +67,7 @@ class AuditLogger:
         quantity: float,
         fee: float,
         rebate: float,
-        **extra,
+        **extra: Any,
     ) -> None:
         self.log(
             "order_filled",
@@ -86,7 +87,7 @@ class AuditLogger:
         action: str,
         outcome_side: str,
         reason: str,
-        **extra,
+        **extra: Any,
     ) -> None:
         self.log(
             "order_rejected",
@@ -98,7 +99,7 @@ class AuditLogger:
         )
 
     def log_kill_switch(self, reason: str, balance: float | None = None) -> None:
-        extra = {"reason": reason}
+        extra: dict[str, Any] = {"reason": reason}
         if balance is not None:
             extra["balance"] = balance
         self.log("kill_switch", "SYSTEM", "cancel_all", **extra)

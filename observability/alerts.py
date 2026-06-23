@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum
+from typing import Any
 
 from resilience.circuit_breaker import CircuitBreakerRegistry
 from resilience.dead_letter_queue import get_dlq_registry
@@ -29,7 +30,7 @@ class Alert:
     value: float | None = None
     threshold: float | None = None
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "severity": self.severity.value,
@@ -68,30 +69,29 @@ class AlertRule:
         return None
 
     def _should_fire(self, alert: Alert) -> bool:
-        if self.last_alert is None:
-            return True
-        if time.time() - self.last_alert.timestamp >= self.alert_cooldown:
-            return True
-        return False
+        return (
+            self.last_alert is None
+            or time.time() - self.last_alert.timestamp >= self.alert_cooldown
+        )
 
 
 class AlertManager:
-    def __init__(self):
+    def __init__(self) -> None:
         self._rules: list[AlertRule] = []
         self._handlers: list[Callable[[Alert], None]] = []
         self._lock = threading.Lock()
         self._running = False
         self._thread: threading.Thread | None = None
 
-    def add_rule(self, rule: AlertRule):
+    def add_rule(self, rule: AlertRule) -> None:
         with self._lock:
             self._rules.append(rule)
 
-    def add_handler(self, handler: Callable[[Alert], None]):
+    def add_handler(self, handler: Callable[[Alert], None]) -> None:
         with self._lock:
             self._handlers.append(handler)
 
-    def start(self, interval: float = 30.0):
+    def start(self, interval: float = 30.0) -> None:
         if self._running:
             return
         self._running = True
@@ -99,13 +99,13 @@ class AlertManager:
         self._thread.start()
         logger.info("Alert manager started")
 
-    def stop(self):
+    def stop(self) -> None:
         self._running = False
         if self._thread:
             self._thread.join(timeout=5.0)
         logger.info("Alert manager stopped")
 
-    def _run_loop(self, interval: float):
+    def _run_loop(self, interval: float) -> None:
         while self._running:
             try:
                 self._evaluate_rules()
@@ -113,7 +113,7 @@ class AlertManager:
                 logger.error(f"Error in alert evaluation loop: {e}")
             time.sleep(interval)
 
-    def _evaluate_rules(self):
+    def _evaluate_rules(self) -> None:
         alerts_to_fire = []
         with self._lock:
             for rule in self._rules:
@@ -125,7 +125,7 @@ class AlertManager:
         for alert in alerts_to_fire:
             self._fire_alert(alert)
 
-    def _fire_alert(self, alert: Alert):
+    def _fire_alert(self, alert: Alert) -> None:
         logger.log(
             logging.CRITICAL if alert.severity == AlertSeverity.CRITICAL else logging.WARNING,
             f"ALERT [{alert.severity.value.upper()}] {alert.name}: {alert.message}",
@@ -151,23 +151,22 @@ def get_alert_manager() -> AlertManager:
         return _alert_manager
 
 
-def _setup_default_rules(manager: AlertManager):
+def _setup_default_rules(manager: AlertManager) -> None:
     cb_registry = CircuitBreakerRegistry()
     dlq_registry = get_dlq_registry()
 
     def check_ws_disconnect() -> Alert | None:
         cb_stats = cb_registry.get_all_stats()
         for name, stats in cb_stats.items():
-            if "ws" in name.lower() or "websocket" in name.lower():
-                if stats["state"] == "open":
-                    return Alert(
-                        name="websocket_disconnected",
-                        severity=AlertSeverity.CRITICAL,
-                        message=f"WebSocket circuit breaker '{name}' is OPEN - connection lost",
-                        labels={"circuit_breaker": name},
-                        value=2.0,
-                        threshold=1.0,
-                    )
+            if ("ws" in name.lower() or "websocket" in name.lower()) and stats["state"] == "open":
+                return Alert(
+                    name="websocket_disconnected",
+                    severity=AlertSeverity.CRITICAL,
+                    message=f"WebSocket circuit breaker '{name}' is OPEN - connection lost",
+                    labels={"circuit_breaker": name},
+                    value=2.0,
+                    threshold=1.0,
+                )
         return None
 
     def check_order_rejection_rate() -> Alert | None:
@@ -189,12 +188,15 @@ def _setup_default_rules(manager: AlertManager):
                     return Alert(
                         name="high_order_rejection_rate",
                         severity=AlertSeverity.WARNING,
-                        message=f"Order rejection rate is {rate:.1%} (rejected: {rejected}, placed: {placed})",
+                        message=(
+                            f"Order rejection rate is {rate:.1%} "
+                            f"(rejected: {rejected}, placed: {placed})"
+                        ),
                         value=rate,
                         threshold=0.1,
                     )
         except Exception:
-            pass
+            logger.debug("Failed to check order rejection rate", exc_info=True)
         return None
 
     def check_kill_switch() -> Alert | None:
@@ -208,12 +210,15 @@ def _setup_default_rules(manager: AlertManager):
                 return Alert(
                     name="balance_approaching_kill_switch",
                     severity=AlertSeverity.WARNING,
-                    message=f"Balance ${balance:.2f} approaching kill switch threshold ${Config.KILL_SWITCH_MIN_BALANCE:.2f}",
+                        message=(
+                            f"Balance ${balance:.2f} approaching kill switch "
+                            f"threshold ${Config.KILL_SWITCH_MIN_BALANCE:.2f}"
+                        ),
                     value=float(balance),
                     threshold=float(Config.KILL_SWITCH_MIN_BALANCE * Decimal("1.5")),
                 )
         except Exception:
-            pass
+            logger.debug("Failed to check kill switch", exc_info=True)
         return None
 
     def check_circuit_breakers() -> Alert | None:
@@ -261,7 +266,7 @@ def _setup_default_rules(manager: AlertManager):
                     threshold=512.0,
                 )
         except Exception:
-            pass
+            logger.debug("Failed to check memory usage", exc_info=True)
         return None
 
     def check_temperature() -> Alert | None:
@@ -277,13 +282,16 @@ def _setup_default_rules(manager: AlertManager):
                         return Alert(
                             name="high_temperature",
                             severity=AlertSeverity.CRITICAL,
-                            message=f"System temperature {entry.current:.1f}C exceeds 75C threshold",
+                            message=(
+                                f"System temperature {entry.current:.1f}C "
+                                "exceeds 75C threshold"
+                            ),
                             labels={"sensor": f"{name}:{entry.label}"},
                             value=entry.current,
                             threshold=75.0,
                         )
         except Exception:
-            pass
+            logger.debug("Failed to check temperature", exc_info=True)
         return None
 
     manager.add_rule(AlertRule("ws_disconnect", check_ws_disconnect, interval=30.0))
@@ -295,7 +303,7 @@ def _setup_default_rules(manager: AlertManager):
     manager.add_rule(AlertRule("temperature", check_temperature, interval=60.0))
 
 
-def log_alert_handler(alert: Alert):
+def log_alert_handler(alert: Alert) -> None:
     import json
     import os
 
@@ -306,39 +314,57 @@ def log_alert_handler(alert: Alert):
         f.write(json.dumps(alert.to_dict()) + "\n")
 
 
-def slack_alert_handler(webhook_url: str):
+def slack_alert_handler(webhook_url: str) -> Callable[[Alert], None]:
     import json as json_mod
+    import urllib.parse
     import urllib.request
 
-    def _handler(alert: Alert):
+    def _handler(alert: Alert) -> None:
         if not webhook_url:
             return
         try:
-            payload = json_mod.dumps({
-                "text": (
-                    f"[{alert.severity.value.upper()}] {alert.name}\n"
-                    f"{alert.message}\n"
-                    f"Value: {alert.value} | Threshold: {alert.threshold}"
-                ),
-                "attachments": [{"color": "danger" if alert.severity == AlertSeverity.CRITICAL else "warning",
-                                 "fields": [{"title": k, "value": str(v), "short": True}
-                                            for k, v in alert.labels.items()]}],
-            }).encode()
-            req = urllib.request.Request(webhook_url, data=payload,
-                                         headers={"Content-Type": "application/json"},
-                                         method="POST")
-            urllib.request.urlopen(req, timeout=10)
+            payload = json_mod.dumps(
+                {
+                    "text": (
+                        f"[{alert.severity.value.upper()}] {alert.name}\n"
+                        f"{alert.message}\n"
+                        f"Value: {alert.value} | Threshold: {alert.threshold}"
+                    ),
+                    "attachments": [
+                        {
+                            "color": "danger"
+                            if alert.severity == AlertSeverity.CRITICAL
+                            else "warning",
+                            "fields": [
+                                {"title": k, "value": str(v), "short": True}
+                                for k, v in alert.labels.items()
+                            ],
+                        }
+                    ],
+                }
+            ).encode()
+            parsed = urllib.parse.urlparse(webhook_url)
+            if parsed.scheme not in ("http", "https"):
+                logger.error(f"Invalid webhook URL scheme: {parsed.scheme}")
+                return None
+            req = urllib.request.Request(  # noqa: S310
+                webhook_url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=10)  # noqa: S310
         except Exception as e:
             logger.error(f"Failed to send Slack alert: {e}")
 
     return _handler
 
 
-def smtp_alert_handler(smtp_config: dict | None = None):
+def smtp_alert_handler(smtp_config: dict[str, Any] | None = None) -> Callable[[Alert], None] | None:
     if not smtp_config:
         return None
 
-    def _handler(alert: Alert):
+    def _handler(alert: Alert) -> None:
         try:
             import smtplib
             from email.message import EmailMessage
@@ -376,8 +402,9 @@ def smtp_alert_handler(smtp_config: dict | None = None):
     return _handler
 
 
-def setup_alerts(slack_webhook_url: str | None = None,
-                 smtp_config: dict | None = None):
+def setup_alerts(
+    slack_webhook_url: str | None = None, smtp_config: dict[str, Any] | None = None
+) -> AlertManager:
     manager = get_alert_manager()
     manager.add_handler(log_alert_handler)
     if slack_webhook_url:

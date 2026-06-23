@@ -1,8 +1,12 @@
+from __future__ import annotations
+
 import logging
 import threading
 from decimal import Decimal
+from typing import Any
 
 logger = logging.getLogger("kalshi_bot.order_book")
+
 
 class LocalOrderBook:
     def __init__(self, max_depth: int = 200):
@@ -13,12 +17,12 @@ class LocalOrderBook:
         self.market_ticker: str | None = None
         self.market_id: str | None = None
 
-    def clear(self):
+    def clear(self) -> None:
         with self._lock:
             self.yes_bids.clear()
             self.no_bids.clear()
 
-    def apply_snapshot(self, snapshot_msg: dict):
+    def apply_snapshot(self, snapshot_msg: dict[str, Any]) -> None:
         with self._lock:
             self.yes_bids.clear()
             self.no_bids.clear()
@@ -41,7 +45,7 @@ class LocalOrderBook:
                 f"YES Bids: {len(self.yes_bids)}, NO Bids: {len(self.no_bids)}"
             )
 
-    def apply_delta(self, delta_msg: dict):
+    def apply_delta(self, delta_msg: dict[str, Any]) -> None:
         with self._lock:
             msg_content = delta_msg.get("msg", {})
             side = msg_content.get("side", "").lower()
@@ -60,17 +64,18 @@ class LocalOrderBook:
                 target_book[price] = new_qty
             self._prune_book()
             logger.debug(
-                f"Applied delta for {self.market_ticker}: {side} bid @ {price_str} delta={delta_str} -> new_qty={new_qty}"
+                f"Applied delta for {self.market_ticker}: {side} "
+                f"bid @ {price_str} delta={delta_str} -> new_qty={new_qty}"
             )
 
-    def _prune_book(self):
+    def _prune_book(self) -> None:
         if len(self.yes_bids) > self.max_depth:
             sorted_prices = sorted(self.yes_bids.keys(), reverse=True)
-            for price in sorted_prices[self.max_depth:]:
+            for price in sorted_prices[self.max_depth :]:
                 del self.yes_bids[price]
         if len(self.no_bids) > self.max_depth:
             sorted_prices = sorted(self.no_bids.keys(), reverse=True)
-            for price in sorted_prices[self.max_depth:]:
+            for price in sorted_prices[self.max_depth :]:
                 del self.no_bids[price]
 
     def get_yes_bids(self) -> list[tuple[Decimal, Decimal]]:
@@ -125,7 +130,7 @@ class LocalOrderBook:
             asks.sort(key=lambda x: x[0])
             return asks[0] if asks else (None, None)
 
-    def get_yes_book(self) -> dict:
+    def get_yes_book(self) -> dict[str, list[tuple[Decimal, Decimal]]]:
         with self._lock:
             return {
                 "bids": sorted(self.yes_bids.items(), key=lambda x: x[0], reverse=True),
@@ -135,7 +140,7 @@ class LocalOrderBook:
                 ),
             }
 
-    def get_no_book(self) -> dict:
+    def get_no_book(self) -> dict[str, list[tuple[Decimal, Decimal]]]:
         with self._lock:
             return {
                 "bids": sorted(self.no_bids.items(), key=lambda x: x[0], reverse=True),

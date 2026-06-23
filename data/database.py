@@ -3,8 +3,8 @@ import logging
 import os
 import sqlite3
 import stat
-import time
-from datetime import datetime
+from collections.abc import Iterator
+from typing import Any
 
 from config import Config
 
@@ -43,7 +43,7 @@ def get_connection() -> sqlite3.Connection:
 
 
 @contextlib.contextmanager
-def db_scope():
+def db_scope() -> Iterator[sqlite3.Connection]:
     conn = get_connection()
     try:
         yield conn
@@ -55,7 +55,7 @@ def db_scope():
         conn.close()
 
 
-def initialize_db():
+def initialize_db() -> None:
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -165,7 +165,7 @@ def initialize_db():
     logger.info("SQLite Database successfully initialized.")
 
 
-def _run_migrations(conn):
+def _run_migrations(conn: sqlite3.Connection) -> None:
     cursor = conn.cursor()
     current = 0
     try:
@@ -190,7 +190,10 @@ def _run_migrations(conn):
             try:
                 migration(cursor)
                 cursor.execute(
-                    "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (?, datetime('now'))",
+                    (
+                        "INSERT OR REPLACE INTO schema_version "
+                        "(version, applied_at) VALUES (?, datetime('now'))"
+                    ),
                     (i,),
                 )
                 conn.commit()
@@ -198,24 +201,25 @@ def _run_migrations(conn):
             except Exception as e:
                 logger.warning(f"Migration v{i} skipped ({e})")
                 cursor.execute(
-                    "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (?, datetime('now'))",
+                    (
+                        "INSERT OR REPLACE INTO schema_version "
+                        "(version, applied_at) VALUES (?, datetime('now'))"
+                    ),
                     (i,),
                 )
                 conn.commit()
 
 
-def _migration_v1_initial(cursor):
+def _migration_v1_initial(cursor: sqlite3.Cursor) -> None:
     pass
 
 
-def _migration_v2_kalshi_order_id(cursor):
-    try:
+def _migration_v2_kalshi_order_id(cursor: sqlite3.Cursor) -> None:
+    with contextlib.suppress(sqlite3.OperationalError):
         cursor.execute("ALTER TABLE orders ADD COLUMN kalshi_order_id TEXT")
-    except sqlite3.OperationalError:
-        pass
 
 
-def _migration_v3_strategy_signals(cursor):
+def _migration_v3_strategy_signals(cursor: sqlite3.Cursor) -> None:
     try:
         cursor.execute("ALTER TABLE strategy_signals ADD COLUMN series_id TEXT")
         cursor.execute("ALTER TABLE strategy_signals ADD COLUMN notes TEXT")
@@ -223,24 +227,20 @@ def _migration_v3_strategy_signals(cursor):
         pass
 
 
-def _migration_v4_rename_order_id(cursor):
-    try:
+def _migration_v4_rename_order_id(cursor: sqlite3.Cursor) -> None:
+    with contextlib.suppress(sqlite3.OperationalError):
         cursor.execute("SELECT kalshi_order_id FROM orders LIMIT 1")
-    except sqlite3.OperationalError:
-        try:
-            cursor.execute("ALTER TABLE orders ADD COLUMN kalshi_order_id TEXT")
-        except sqlite3.OperationalError:
-            pass
+        cursor.execute("ALTER TABLE orders ADD COLUMN kalshi_order_id TEXT")
 
 
-def _migration_v5_signal_id(cursor):
-    try:
-        cursor.execute("ALTER TABLE orders ADD COLUMN signal_id INTEGER REFERENCES strategy_signals(id)")
-    except sqlite3.OperationalError:
-        pass
+def _migration_v5_signal_id(cursor: sqlite3.Cursor) -> None:
+    with contextlib.suppress(sqlite3.OperationalError):
+        cursor.execute(
+            "ALTER TABLE orders ADD COLUMN signal_id INTEGER REFERENCES strategy_signals(id)"
+        )
 
 
-def _migration_v6_portfolio_snapshots(cursor):
+def _migration_v6_portfolio_snapshots(cursor: sqlite3.Cursor) -> None:
     pass
 
 
@@ -248,14 +248,15 @@ def log_release(
     indicator: str,
     release_date: str,
     actual: float,
-    forecast: float = None,
-    previous: float = None,
+    forecast: float | None = None,
+    previous: float | None = None,
 ) -> int:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
         """
-        INSERT INTO macro_releases (indicator, release_date, actual_value, forecast_value, previous_value)
+        INSERT INTO macro_releases
+            (indicator, release_date, actual_value, forecast_value, previous_value)
         VALUES (?, ?, ?, ?, ?)
     """,
         (indicator, release_date, actual, forecast, previous),
@@ -263,10 +264,8 @@ def log_release(
     release_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    logger.info(
-        f"Logged macro release {indicator} (ID: {release_id}) with actual={actual}"
-    )
-    return release_id
+    logger.info(f"Logged macro release {indicator} (ID: {release_id}) with actual={actual}")
+    return release_id  # type: ignore[return-value]
 
 
 def log_shadow_trade(
@@ -276,18 +275,18 @@ def log_shadow_trade(
     outcome_side: str,
     price: float,
     quantity: float,
-    synthetic_ask: float = None,
-    proposed_kelly: float = None,
-    final_wager: float = None,
-    fee_accumulator: float = None,
-    release_id: int = None,
+    synthetic_ask: float | None = None,
+    proposed_kelly: float | None = None,
+    final_wager: float | None = None,
+    fee_accumulator: float | None = None,
+    release_id: int | None = None,
 ) -> int:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
         """
         INSERT INTO shadow_trades (
-            ticker, timestamp, action, outcome_side, price, quantity, 
+            ticker, timestamp, action, outcome_side, price, quantity,
             synthetic_ask, proposed_kelly, final_wager, fee_accumulator, release_id
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -309,15 +308,13 @@ def log_shadow_trade(
     trade_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    logger.info(
-        f"Logged shadow trade (ID: {trade_id}) for {ticker} (outcome: {outcome_side})"
-    )
-    return trade_id
+    logger.info(f"Logged shadow trade (ID: {trade_id}) for {ticker} (outcome: {outcome_side})")
+    return trade_id  # type: ignore[return-value]
 
 
 def log_market_data(
     ticker: str, timestamp: str, best_bid: float, best_ask: float, source: str
-):
+) -> None:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -331,12 +328,26 @@ def log_market_data(
     conn.close()
 
 
-def order_exists(client_order_id: str) -> bool:
+def has_active_order(ticker: str, side: str, price: float, action: str) -> bool:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT 1 FROM orders WHERE client_order_id = ?", (client_order_id,)
+        """
+        SELECT 1 FROM orders
+        WHERE ticker = ? AND outcome_side = ? AND price = ? AND action = ?
+        LIMIT 1
+    """,
+        (ticker, side, price, action),
     )
+    exists = cursor.fetchone() is not None
+    conn.close()
+    return exists
+
+
+def order_exists(client_order_id: str) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM orders WHERE client_order_id = ?", (client_order_id,))
     exists = cursor.fetchone() is not None
     conn.close()
     return exists
@@ -346,17 +357,18 @@ def store_order(
     client_order_id: str,
     ticker: str,
     status: str = "pending",
-    action: str = None,
-    outcome_side: str = None,
-    price: float = None,
-    quantity: float = None,
-    signal_id: int = None,
+    action: str | None = None,
+    outcome_side: str | None = None,
+    price: float | None = None,
+    quantity: float | None = None,
+    signal_id: int | None = None,
 ) -> int:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
         """
-        INSERT INTO orders (client_order_id, ticker, status, action, outcome_side, price, quantity, signal_id)
+        INSERT INTO orders
+            (client_order_id, ticker, status, action, outcome_side, price, quantity, signal_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """,
         (client_order_id, ticker, status, action, outcome_side, price, quantity, signal_id),
@@ -364,15 +376,15 @@ def store_order(
     order_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    return order_id
+    return order_id  # type: ignore[return-value]
 
 
 def update_order_status(
     client_order_id: str,
     status: str,
-    error_message: str = None,
-    kalshi_order_id: str = None,
-):
+    error_message: str | None = None,
+    kalshi_order_id: str | None = None,
+) -> None:
     conn = get_connection()
     cursor = conn.cursor()
     fields = ["status = ?", "updated_at = datetime('now')"]
@@ -385,13 +397,33 @@ def update_order_status(
         params.append(kalshi_order_id)
     params.append(client_order_id)
     cursor.execute(
-        f"UPDATE orders SET {', '.join(fields)} WHERE client_order_id = ?", params
+        f"UPDATE orders SET {', '.join(fields)} WHERE client_order_id = ?",  # noqa: S608
+        params,
     )
     conn.commit()
     conn.close()
 
 
-def get_orders_for_position(ticker: str, side: str) -> list[dict]:
+def get_open_db_orders() -> list[dict[str, Any]]:
+    conn = get_connection()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT client_order_id, ticker, status, action, outcome_side,
+               price, quantity, kalshi_order_id, signal_id
+        FROM orders
+        WHERE status IN ('pending', 'submitted', 'partial')
+          AND kalshi_order_id IS NOT NULL
+        ORDER BY created_at ASC
+    """
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_orders_for_position(ticker: str, side: str) -> list[dict[str, Any]]:
     conn = get_connection()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -412,17 +444,17 @@ def get_orders_for_position(ticker: str, side: str) -> list[dict]:
 
 def log_strategy_signal(
     indicator: str,
-    forecast_value: float = None,
-    actual_value: float = None,
-    surprise: float = None,
-    sigma: float = None,
-    signal_quality: str = None,
-    conviction: float = None,
-    side: str = None,
-    wager: float = None,
-    series_id: str = None,
-    notes: str = None,
-    profitable: bool = None,
+    forecast_value: float | None = None,
+    actual_value: float | None = None,
+    surprise: float | None = None,
+    sigma: float | None = None,
+    signal_quality: str | None = None,
+    conviction: float | None = None,
+    side: str | None = None,
+    wager: float | None = None,
+    series_id: str | None = None,
+    notes: str | None = None,
+    profitable: bool | None = None,
 ) -> int:
     conn = get_connection()
     cursor = conn.cursor()
@@ -433,16 +465,28 @@ def log_strategy_signal(
              signal_quality, conviction, side, wager, series_id, notes, profitable)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """,
-        (indicator, forecast_value, actual_value, surprise, sigma,
-         signal_quality, conviction, side, wager, series_id, notes, profitable),
+        (
+            indicator,
+            forecast_value,
+            actual_value,
+            surprise,
+            sigma,
+            signal_quality,
+            conviction,
+            side,
+            wager,
+            series_id,
+            notes,
+            profitable,
+        ),
     )
     sig_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    return sig_id
+    return sig_id  # type: ignore[return-value]
 
 
-def update_signal_profitability(signal_id: int, profitable: bool):
+def update_signal_profitability(signal_id: int, profitable: bool) -> None:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT profitable FROM strategy_signals WHERE id = ?", (signal_id,))
@@ -462,7 +506,38 @@ def update_signal_profitability(signal_id: int, profitable: bool):
     conn.close()
 
 
-def get_strategy_performance(indicator: str = None) -> list[dict]:
+def get_strategy_performance_summary(
+    indicator: str | None = None,
+) -> list[dict[str, Any]]:
+    conn = get_connection()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    params: list[Any] = [indicator] if indicator else []
+
+    query = """
+        SELECT
+            indicator,
+            COUNT(*) AS total_signals,
+            SUM(CASE WHEN profitable = 1 THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN profitable = 0 THEN 1 ELSE 0 END) AS losses,
+            ROUND(AVG(sigma), 2) AS avg_sigma,
+            ROUND(AVG(conviction), 4) AS avg_conviction,
+            ROUND(AVG(wager), 2) AS avg_wager,
+            ROUND(SUM(wager), 2) AS total_wager
+        FROM strategy_signals
+    """
+    if indicator:
+        query += " WHERE indicator = ?"
+    query += " GROUP BY indicator ORDER BY indicator"
+
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_strategy_performance(indicator: str | None = None) -> list[dict[str, Any]]:
     conn = get_connection()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -493,18 +568,19 @@ def get_strategy_performance(indicator: str = None) -> list[dict]:
 
 def log_portfolio_snapshot(
     balance: float,
-    total_exposure: float = None,
-    open_positions: int = None,
-    total_realized_pnl: float = None,
-    total_unrealized_pnl: float = None,
-    sector: str = None,
+    total_exposure: float | None = None,
+    open_positions: int | None = None,
+    total_realized_pnl: float | None = None,
+    total_unrealized_pnl: float | None = None,
+    sector: str | None = None,
 ) -> int:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
         """
         INSERT INTO portfolio_snapshots
-            (balance, total_exposure, open_positions, total_realized_pnl, total_unrealized_pnl, sector)
+            (balance, total_exposure, open_positions, total_realized_pnl,
+             total_unrealized_pnl, sector)
         VALUES (?, ?, ?, ?, ?, ?)
     """,
         (balance, total_exposure, open_positions, total_realized_pnl, total_unrealized_pnl, sector),
@@ -512,17 +588,17 @@ def log_portfolio_snapshot(
     snap_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    return snap_id
+    return snap_id  # type: ignore[return-value]
 
 
-def vacuum_database():
+def vacuum_database() -> None:
     conn = get_connection()
     conn.execute("VACUUM")
     conn.close()
     logger.info("Database vacuum completed.")
 
 
-def get_db_stats() -> dict:
+def get_db_stats() -> dict[str, Any]:
     conn = get_connection()
     cursor = conn.cursor()
     tables = [
@@ -536,7 +612,7 @@ def get_db_stats() -> dict:
     stats = {}
     for table in tables:
         try:
-            cursor.execute(f"SELECT COUNT(*) FROM {table}")
+            cursor.execute(f"SELECT COUNT(*) FROM {table}")  # noqa: S608
             stats[table] = cursor.fetchone()[0]
         except sqlite3.OperationalError:
             stats[table] = 0

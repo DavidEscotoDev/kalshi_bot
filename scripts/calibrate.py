@@ -17,6 +17,7 @@ import itertools
 import logging
 import os
 import sys
+from typing import Any
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -36,7 +37,7 @@ def compute_conviction(sigma: float, surprise: float, slope: float, max_delta: f
     return 0.50 + direction * delta
 
 
-def evaluate_params(trades: list[dict], slope: float, max_delta: float) -> dict:
+def evaluate_params(trades: list[dict[str, Any]], slope: float, max_delta: float) -> dict[str, Any]:
     sigmas = []
     convictions_norm = []
     saturated = 0
@@ -114,12 +115,12 @@ def _pearson(x: list[float], y: list[float]) -> float:
         return 0.0
     mx = sum(x) / n
     my = sum(y) / n
-    num = sum((xi - mx) * (yi - my) for xi, yi in zip(x, y))
+    num = sum((xi - mx) * (yi - my) for xi, yi in zip(x, y, strict=False))
     dx = sum((xi - mx) ** 2 for xi in x) ** 0.5
     dy = sum((yi - my) ** 2 for yi in y) ** 0.5
     if dx == 0 or dy == 0:
         return 0.0
-    return num / (dx * dy)
+    return num / (dx * dy)  # type: ignore[no-any-return]
 
 
 def _conviction_bucket(conviction: float) -> str:
@@ -136,11 +137,11 @@ def _conviction_bucket(conviction: float) -> str:
 
 
 def walk_forward_optimize(
-    trades: list[dict],
+    trades: list[dict[str, Any]],
     slopes: list[float],
     max_deltas: list[float],
     min_windows: int = 3,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     oos_results = []
     window_size = max(len(trades) // 4, 5)
     test_size = max(window_size // 2, 3)
@@ -148,8 +149,8 @@ def walk_forward_optimize(
     start = train_size
 
     while start + test_size <= len(trades):
-        train = trades[start - train_size:start]
-        test = trades[start:start + test_size]
+        train = trades[start - train_size : start]
+        test = trades[start : start + test_size]
 
         grid_results = []
         for slope, max_delta in itertools.product(slopes, max_deltas):
@@ -164,22 +165,27 @@ def walk_forward_optimize(
             continue
 
         oos = evaluate_params(test, best["slope"], best["max_delta"])
-        oos_results.append({
-            "train_end": train[-1].get("timestamp", ""),
-            "best_slope": best["slope"],
-            "best_max_delta": best["max_delta"],
-            "train_score": best["score"],
-            "train_corr": best["correlation"],
-            "train_trades": best["trades"],
-            "oos_score": oos["score"],
-            "oos_corr": oos["correlation"],
-            "oos_trades": oos["trades"],
-        })
+        oos_results.append(
+            {
+                "train_end": train[-1].get("timestamp", ""),
+                "best_slope": best["slope"],
+                "best_max_delta": best["max_delta"],
+                "train_score": best["score"],
+                "train_corr": best["correlation"],
+                "train_trades": best["trades"],
+                "oos_score": oos["score"],
+                "oos_corr": oos["correlation"],
+                "oos_trades": oos["trades"],
+            }
+        )
 
         logger.info(
-            f"  Window {len(oos_results)}: best slope={best['slope']:.2f} delta={best['max_delta']:.2f} "
-            f"train_score={best['score']:.4f} (corr={best['correlation']:.3f}, {best['trades']}t)  ->  "
-            f"OOS score={oos['score']:.4f} (corr={oos['correlation']:.3f}, {oos['trades']}t)"
+            f"  Window {len(oos_results)}: "
+            f"best slope={best['slope']:.2f} delta={best['max_delta']:.2f} "
+            f"train_score={best['score']:.4f} "
+            f"(corr={best['correlation']:.3f}, {best['trades']}t)  ->  "
+            f"OOS score={oos['score']:.4f} "
+            f"(corr={oos['correlation']:.3f}, {oos['trades']}t)"
         )
 
         start += test_size
@@ -187,7 +193,7 @@ def walk_forward_optimize(
     return oos_results
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Calibrate Kalshi conviction params")
     parser.add_argument("--indicator", default=None, help="Filter by indicator (e.g. CPI, PCE)")
     parser.add_argument("--walk-forward", action="store_true", help="Run walk-forward optimization")
@@ -217,15 +223,27 @@ def main():
             sys.exit(1)
 
         print("\n=== WALK-FORWARD RESULTS ===")
-        cols = f"{'Window':>10} | {'Slope':>5} | {'Delta':>5} | {'Train Score':>11} | {'OOS Score':>10} | {'OOS Corr':>8} | {'OOS Trades':>10}"
+        cols = (
+            f"{'Window':>10} | {'Slope':>5} | {'Delta':>5} | "
+            f"{'Train Score':>11} | {'OOS Score':>10} | "
+            f"{'OOS Corr':>8} | {'OOS Trades':>10}"
+        )
         print(cols)
         print("-" * len(cols))
         for r in oos_results:
-            print(f"{r['train_end'][:10]:>10} | {r['best_slope']:>5.2f} | {r['best_max_delta']:>5.2f} | {r['train_score']:>11.4f} | {r['oos_score']:>10.4f} | {r['oos_corr']:>8.3f} | {r['oos_trades']:>10}")
+            print(
+                f"{r['train_end'][:10]:>10} | {r['best_slope']:>5.2f} | "
+                f"{r['best_max_delta']:>5.2f} | {r['train_score']:>11.4f} | "
+                f"{r['oos_score']:>10.4f} | {r['oos_corr']:>8.3f} | "
+                f"{r['oos_trades']:>10}"
+            )
 
         avg_slope = sum(r["best_slope"] for r in oos_results) / len(oos_results)
         avg_delta = sum(r["best_max_delta"] for r in oos_results) / len(oos_results)
-        print(f"\nAverage best params: CONVICTION_SLOPE={avg_slope:.4f}, CONVICTION_MAX_DELTA={avg_delta:.4f}")
+        print(
+            f"\nAverage best params: "
+            f"CONVICTION_SLOPE={avg_slope:.4f}, CONVICTION_MAX_DELTA={avg_delta:.4f}"
+        )
     else:
         results = []
         for slope, max_delta in itertools.product(slopes, max_deltas):
@@ -237,19 +255,36 @@ def main():
         results.sort(key=lambda x: x["score"], reverse=True)
 
         print(f"\n=== TOP {args.top_n} PARAMETER COMBINATIONS (by score) ===")
-        cols = f"{'slope':>5} | {'max_delta':>5} | {'score':>7} | {'corr':>6} | {'dyn_range':>9} | {'sat_rate':>8} | {'trades':>6} | {'buckets'}"
+        cols = (
+            f"{'slope':>5} | {'max_delta':>5} | {'score':>7} | "
+            f"{'corr':>6} | {'dyn_range':>9} | {'sat_rate':>8} | "
+            f"{'trades':>6} | {'buckets'}"
+        )
         print(cols)
         print("-" * len(cols))
-        for r in results[:args.top_n]:
+        for r in results[: args.top_n]:
             b = ", ".join(f"{k}={v:.0%}" for k, v in r.get("buckets", {}).items())
-            print(f"{r['slope']:>5.2f} | {r['max_delta']:>5.2f} | {r['score']:>7.4f} | {r['correlation']:>6.3f} | {r['dynamic_range']:>9.4f} | {r['saturation']:>8.2%} | {r['trades']:>6} | {b}")
+            print(
+                f"{r['slope']:>5.2f} | {r['max_delta']:>5.2f} | "
+                f"{r['score']:>7.4f} | {r['correlation']:>6.3f} | "
+                f"{r['dynamic_range']:>9.4f} | {r['saturation']:>8.2%} | "
+                f"{r['trades']:>6} | {b}"
+            )
 
         best = results[0]
-        print(f"\nRecommended: CONVICTION_SLOPE={best['slope']}, CONVICTION_MAX_DELTA={best['max_delta']}")
+        print(
+            f"\nRecommended: "
+            f"CONVICTION_SLOPE={best['slope']}, CONVICTION_MAX_DELTA={best['max_delta']}"
+        )
 
         print("\n=== CURRENT DEFAULTS (slope=0.12, delta=0.35) ===")
         default = evaluate_params(trades, 0.12, 0.35)
-        print(f"  score={default['score']:.4f}  correlation={default['correlation']:.3f}  dyn_range={default['dynamic_range']:.4f}  sat={default['saturation']:.2%}")
+        print(
+            f"  score={default['score']:.4f}  "
+            f"correlation={default['correlation']:.3f}  "
+            f"dyn_range={default['dynamic_range']:.4f}  "
+            f"sat={default['saturation']:.2%}"
+        )
         print(f"  bucket distribution: {default.get('buckets', {})}")
 
 

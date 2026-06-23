@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 import logging
 import time
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
 from config import Config
 from data.database import get_connection, log_release, log_strategy_signal
@@ -13,10 +16,10 @@ from strategy.forecast_provider import (
     AlphaVantageEconomicProvider,
     FredSurveyForecastProvider,
     TrailingAverageForecastProvider,
-    scale_conviction,
-    compute_surprise_std,
-    compute_signal_quality,
     _safe_parse_float,
+    compute_signal_quality,
+    compute_surprise_std,
+    scale_conviction,
 )
 
 logger = logging.getLogger("kalshi_bot.macro_tracker")
@@ -35,9 +38,10 @@ def _evaluate_and_place(
     total_capital: Decimal,
     surprise_std: float = 1.0,
     current_sector_exposure: Decimal = Decimal("0.00"),
-) -> dict:
+) -> dict[str, Any]:
     logger.info(
-        f"Evaluating release for {indicator}: Actual={actual}, Forecast={forecast}, Previous={previous}"
+        f"Evaluating release for {indicator}: "
+        f"Actual={actual}, Forecast={forecast}, Previous={previous}"
     )
 
     release_date = datetime.now(UTC).isoformat(timespec="seconds")
@@ -58,7 +62,17 @@ def _evaluate_and_place(
             f"Surprise sigma={sigma:.2f} below MIN_CONVICTION_SIGMA={Config.MIN_CONVICTION_SIGMA}. "
             f"No trade action taken."
         )
-        log_strategy_signal(indicator, forecast, actual, actual - forecast, sigma, "below_threshold", 0.0, "none", 0.0)
+        log_strategy_signal(
+            indicator,
+            forecast,
+            actual,
+            actual - forecast,
+            sigma,
+            "below_threshold",
+            0.0,
+            "none",
+            0.0,
+        )
         return {"status": "low_conviction", "release_id": release_id}
 
     side_to_buy = "yes" if actual_dec > forecast_dec else "no"
@@ -89,7 +103,9 @@ def _evaluate_and_place(
             )
         )
 
-    best_bid_price, _ = order_book.get_best_yes_bid() if side_to_buy == "yes" else order_book.get_best_no_bid()
+    best_bid_price, _ = (
+        order_book.get_best_yes_bid() if side_to_buy == "yes" else order_book.get_best_no_bid()
+    )
     if best_bid_price is not None and price_to_buy is not None:
         spread = abs(price_to_buy - best_bid_price)
         if spread > Config.MAX_SPREAD_PCT:
@@ -97,8 +113,18 @@ def _evaluate_and_place(
                 f"Bid-ask spread {spread:.4f} exceeds MAX_SPREAD_PCT={Config.MAX_SPREAD_PCT}. "
                 f"Skipping trade."
             )
-            log_strategy_signal(indicator, forecast, actual, actual - forecast, sigma,
-                                 "wide_spread", 0.0, side_to_buy, 0.0, notes=f"spread={float(spread):.4f}")
+            log_strategy_signal(
+                indicator,
+                forecast,
+                actual,
+                actual - forecast,
+                sigma,
+                "wide_spread",
+                0.0,
+                side_to_buy,
+                0.0,
+                notes=f"spread={float(spread):.4f}",
+            )
             return {"status": "wide_spread", "release_id": release_id}
 
     raw_kelly = risk_manager.calculate_kelly_fraction(
@@ -118,23 +144,35 @@ def _evaluate_and_place(
 
     if wager <= 0:
         logger.info(
-            f"Signal generated side={side_to_buy} but risk sizing calculated wager size is 0. Aborting order."
+            f"Signal generated side={side_to_buy} but risk sizing "
+            "calculated wager size is 0. Aborting order."
         )
-        log_strategy_signal(indicator, forecast, actual, actual - forecast, sigma,
-                             signal_quality, float(estimated_prob), side_to_buy, 0.0,
-                             notes="zero_wager")
+        log_strategy_signal(
+            indicator,
+            forecast,
+            actual,
+            actual - forecast,
+            sigma,
+            signal_quality,
+            float(estimated_prob),
+            side_to_buy,
+            0.0,
+            notes="zero_wager",
+        )
         return {"status": "zero_wager", "release_id": release_id}
 
     ask_qty = yes_ask_qty if side_to_buy == "yes" else no_ask_qty
+    wager_in_contracts = (wager / price_to_buy).to_integral_value(rounding="ROUND_DOWN")
     if ask_qty is not None:
         max_contracts_at_price = ask_qty
-        wager_in_contracts = (wager / price_to_buy).to_integral_value(rounding="ROUND_DOWN")
         if wager_in_contracts > max_contracts_at_price:
             logger.info(
-                f"Requested {wager_in_contracts} contracts but only {max_contracts_at_price} available at best price. "
+                f"Requested {wager_in_contracts} contracts but only "
+                f"{max_contracts_at_price} available at best price. "
                 f"Capping to {max_contracts_at_price}."
             )
             wager = max_contracts_at_price * price_to_buy
+            wager_in_contracts = max_contracts_at_price
 
     quantity = wager_in_contracts
 
@@ -190,7 +228,7 @@ class CalendarProvider:
         total_capital: Decimal,
         surprise_std: float = 1.0,
         current_sector_exposure: Decimal = Decimal("0.00"),
-    ) -> dict:
+    ) -> dict[str, Any]:
         return _evaluate_and_place(
             indicator=indicator,
             actual=actual,
@@ -208,7 +246,7 @@ class CalendarProvider:
 
 
 class MockCalendarProvider(CalendarProvider):
-    pass
+    @staticmethod
     def trigger_mock_release(
         indicator: str,
         actual: float,
@@ -222,7 +260,7 @@ class MockCalendarProvider(CalendarProvider):
         total_capital: Decimal,
         surprise_std: float = 1.0,
         current_sector_exposure: Decimal = Decimal("0.00"),
-    ) -> dict:
+    ) -> dict[str, Any]:
         return _evaluate_and_place(
             indicator=indicator,
             actual=actual,
@@ -242,12 +280,12 @@ class MockCalendarProvider(CalendarProvider):
 class FredCalendarProvider:
     SERIES_MAPPING = {"CPI": "CPIAUCSL", "FOMC": "FEDFUNDS", "PCE": "PCE"}
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.api_key = Config.FRED_API_KEY
         self.base_url = "https://api.stlouisfed.org/fred/series/observations"
         self.alpha_vantage = AlphaVantageEconomicProvider()
 
-    def fetch_latest_observation(self, indicator: str) -> dict:
+    def fetch_latest_observation(self, indicator: str) -> dict[str, Any]:
         series_id = self.SERIES_MAPPING.get(indicator.upper())
         if not series_id:
             raise ValueError(f"Unknown economic indicator: {indicator}")
@@ -282,7 +320,8 @@ class FredCalendarProvider:
                     parsed_value = _safe_parse_float(latest.get("value"))
                     if parsed_value is None:
                         logger.warning(
-                            f"FRED returned unparseable value for {indicator} on {latest.get('date')}: '{latest.get('value')}'"
+                            f"FRED returned unparseable value for {indicator} "
+                            f"on {latest.get('date')}: '{latest.get('value')}'"
                         )
                         return self.alpha_vantage.fetch_latest_observation(indicator)
 
@@ -323,7 +362,7 @@ class MacroTrackerStrategy:
         sector: str,
         indicator: str | None = None,
         indicators: list[str] | None = None,
-    ):
+    ) -> None:
         if indicator and indicators:
             raise ValueError("Provide either indicator or indicators, not both")
         self.ticker = ticker
@@ -343,11 +382,11 @@ class MacroTrackerStrategy:
         self._ticker_to_sector: dict[str, str] = {}
         self._last_trade_time: dict[str, float] = {}
 
-    def set_ticker_to_sector(self, mapping: dict[str, str]):
+    def set_ticker_to_sector(self, mapping: dict[str, str]) -> None:
         self._ticker_to_sector = mapping
 
     def _resolve_forecast(
-        self, indicator: str, series_id: str, obs: dict
+        self, indicator: str, series_id: str, obs: dict[str, Any]
     ) -> tuple[float, float, float | None] | None:
         prev_val = obs.get("previous")
         all_values = obs.get("all_values", [])
@@ -359,7 +398,9 @@ class MacroTrackerStrategy:
             std_dev = compute_surprise_std(all_values)
             return survey_fcst, std_dev, prev_val
 
-        trailing_fcst = self.trailing_forecast.get_forecast(indicator, series_id, recent_values=all_values)
+        trailing_fcst = self.trailing_forecast.get_forecast(
+            indicator, series_id, recent_values=all_values
+        )
         if trailing_fcst is not None:
             logger.info(f"Using trailing-average forecast: {trailing_fcst:.4f}")
             std_dev = compute_surprise_std(all_values)
@@ -376,7 +417,7 @@ class MacroTrackerStrategy:
         logger.info("No forecast source and no previous value available. No trade possible.")
         return None
 
-    def _compute_signal(self, indicator: str) -> dict | None:
+    def _compute_signal(self, indicator: str) -> dict[str, Any] | None:
         series_id = FredCalendarProvider.SERIES_MAPPING.get(indicator)
         if not series_id:
             return None
@@ -397,7 +438,9 @@ class MacroTrackerStrategy:
         if row:
             return None
 
-        logger.info(f"NEW LIVE MACRO RELEASE DETECTED: {indicator} on date {obs['date']} = {obs['value']}")
+        logger.info(
+            f"NEW LIVE MACRO RELEASE DETECTED: {indicator} on date {obs['date']} = {obs['value']}"
+        )
 
         forecast_result = self._resolve_forecast(indicator, series_id, obs)
         if forecast_result is None:
@@ -417,7 +460,9 @@ class MacroTrackerStrategy:
             "side": side,
         }
 
-    def check_for_new_release(self, total_capital: Decimal, current_sector_exposure: Decimal | None = None) -> bool:
+    def check_for_new_release(
+        self, total_capital: Decimal, current_sector_exposure: Decimal | None = None
+    ) -> bool:
         now = time.time()
 
         # Check cooldown: skip if any indicator was traded recently
@@ -425,9 +470,7 @@ class MacroTrackerStrategy:
             last = self._last_trade_time.get(ind, 0.0)
             if now - last < Config.TRADE_COOLDOWN_SEC:
                 remaining = Config.TRADE_COOLDOWN_SEC - (now - last)
-                logger.info(
-                    f"Cooldown active for {ind}: {remaining:.0f}s remaining. Skipping."
-                )
+                logger.info(f"Cooldown active for {ind}: {remaining:.0f}s remaining. Skipping.")
                 return False
 
         # Collect signals from all watched indicators
@@ -445,12 +488,11 @@ class MacroTrackerStrategy:
             sides = {ind: s["side"] for ind, s in signals.items()}
             unique_sides = set(sides.values())
             if len(unique_sides) != 1:
-                logger.info(
-                    f"Multi-indicator disagreement: {sides}. No trade."
-                )
+                logger.info(f"Multi-indicator disagreement: {sides}. No trade.")
                 return False
             logger.info(
-                f"Multi-indicator consensus: all {len(signals)} indicators agree on {unique_sides.pop()}"
+                f"Multi-indicator consensus: all {len(signals)} indicators "
+                f"agree on {unique_sides.pop()}"
             )
 
         # Use the first signal for the actual trade

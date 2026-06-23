@@ -6,15 +6,16 @@ import time
 from decimal import Decimal
 
 import uvicorn
-from execution.order_state import OrderSide
 
 from config import Config
 from data.audit_log import get_audit_logger
 from data.database import (
+    get_open_db_orders,
     initialize_db,
     log_portfolio_snapshot,
     vacuum_database,
 )
+from execution.order_state import OrderSide, get_order_state_machine
 from execution.position_manager import get_position_manager
 from market.order_book import LocalOrderBook
 from market.websocket_client import KalshiWebSocketClient
@@ -30,13 +31,14 @@ from observability import (
     update_sector_exposure,
     update_system_cpu,
     update_system_memory,
+    update_system_temperature,
     update_total_capital,
     update_var_usage,
     update_ws_connection_count,
 )
 from observability.alerts import setup_alerts
 from observability.health import create_health_app
-from resilience.rate_limiter import configure_default_tiers, get_rate_limiter
+from resilience.rate_limiter import configure_default_tiers
 from safety.kill_switch import KillSwitch
 from strategy.macro_tracker import MacroTrackerStrategy
 
@@ -65,7 +67,7 @@ _health_thread = None
 _shutdown_event = threading.Event()
 
 
-def handle_shutdown(signum, frame):
+def handle_shutdown(signum: int, frame: object | None) -> None:
     global running
     logger.info(f"Signal {signum} received. Initiating graceful shutdown...")
     running = False
@@ -76,7 +78,7 @@ signal.signal(signal.SIGINT, handle_shutdown)
 signal.signal(signal.SIGTERM, handle_shutdown)
 
 
-def verify_startup_health():
+def verify_startup_health() -> None:
     log_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "logs"))
     db_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "data"))
 
@@ -93,7 +95,7 @@ def verify_startup_health():
     )
 
 
-def start_health_server(port: int = 8080):
+def start_health_server(port: int = 8080) -> None:
     global _health_server, _health_thread
     app = create_health_app()
 
@@ -104,13 +106,13 @@ def start_health_server(port: int = 8080):
     logger.info(f"Health server started on 127.0.0.1:{port}")
 
 
-def stop_health_server():
+def stop_health_server() -> None:
     global _health_server
     if _health_server:
         _health_server.should_exit = True
 
 
-def run_loop():
+def run_loop() -> None:
     global running
 
     set_correlation_id()
@@ -121,7 +123,8 @@ def run_loop():
         Config.validate()
         verify_startup_health()
         logger.info(
-            f"Configuration verified. Running in ENV: '{Config.ENV}', SHADOW_MODE: '{Config.SHADOW_MODE}'"
+            f"Configuration verified. Running in ENV: '{Config.ENV}', "
+            f"SHADOW_MODE: '{Config.SHADOW_MODE}'"
         )
     except Exception as e:
         logger.error(f"Configuration validation failed: {e}")
@@ -133,11 +136,12 @@ def run_loop():
     for entry in tickers_raw.split(";"):
         parts = entry.split(",")
         t = parts[0].strip()
-        s = (parts[1].strip() if len(parts) > 1 else os.getenv("KALSHI_SECTOR", "Economics"))
-        ind_raw = (parts[2].strip() if len(parts) > 2 else os.getenv("MACRO_INDICATOR", "CPI"))
-        # Support multi-indicator: "CPI+PCE" -> ["CPI", "PCE"]
+        s = parts[1].strip() if len(parts) > 1 else os.getenv("KALSHI_SECTOR", "Economics")
+        ind_raw = parts[2].strip() if len(parts) > 2 else os.getenv("MACRO_INDICATOR", "CPI")
         i_list = [x.strip().upper() for x in ind_raw.replace("+", ",").split(",")]
         ticker_configs.append((t, s, i_list[0], i_list))
+
+    # Unpack first config to satisfy mypy: entry is (ticker, sector, indicator, indicators)
 
     indicator = ticker_configs[0][2]
     poll_interval = int(os.getenv("POLL_INTERVAL_SEC", "60"))
@@ -165,6 +169,7 @@ def run_loop():
     alert_manager = setup_alerts()
     alert_manager.start()
     from resilience.dead_letter_queue import get_dlq_registry
+
     get_dlq_registry().start_all_processors()
     configure_default_tiers()
     get_audit_logger().cleanup_old_logs()
@@ -202,7 +207,7 @@ def run_loop():
         try:
             api_positions = kill_switch.get_positions()
             ticker_to_price = {}
-            for ticker, _ in ticker_configs:
+            for ticker, _, _, _ in ticker_configs:
                 best_bid, _ = order_book.get_best_yes_bid()
                 best_ask, _ = order_book.get_best_yes_ask()
                 ticker_to_price[ticker] = {
@@ -214,10 +219,20 @@ def run_loop():
         except Exception as e:
             logger.warning(f"Position reconciliation failed (non-fatal): {e}")
 
-    last_health_check = 0
+    try:
+        db_orders = get_open_db_orders()
+        if db_orders:
+            restored = get_order_state_machine().restore_from_db(db_orders)
+            logger.info(f"Restored {restored} open orders from database on restart")
+            for s in strategies:
+                s.execution_engine.poll_order_statuses(kill_switch)
+    except Exception as e:
+        logger.warning(f"Order recovery from database failed (non-fatal): {e}")
+
+    last_health_check = 0.0
     health_check_interval = 30
-    last_vacuum_time = 0
-    last_snapshot_time = 0
+    last_vacuum_time = 0.0
+    last_snapshot_time = 0.0
     snapshot_interval = 300
 
     while running:
@@ -239,13 +254,16 @@ def run_loop():
                 for pos in stop_loss_positions:
                     logger.critical(
                         f"STOP-LOSS TRIGGERED: {pos.ticker} {pos.side.value} "
-                        f"unrealized PnL=${pos.unrealized_pnl:.2f} exceeds {stop_loss_pct * 100}% threshold"
+                        f"unrealized PnL=${pos.unrealized_pnl:.2f} "
+                        f"exceeds {stop_loss_pct * 100}% threshold"
                     )
                 kill_switch_active = True
                 kill_switch.cancel_all_orders()
                 break
 
-            trailing_stop_positions = position_manager.get_trailing_stop_positions(Config.TRAILING_STOP_PCT)
+            trailing_stop_positions = position_manager.get_trailing_stop_positions(
+                Config.TRAILING_STOP_PCT
+            )
             for pos in trailing_stop_positions:
                 if position_manager.has_pending_exit(pos.ticker, pos.side):
                     continue
@@ -254,16 +272,27 @@ def run_loop():
                     f"drawdown exceeded {Config.TRAILING_STOP_PCT * 100}% from high"
                 )
                 if pos.quantity > 0 and strategies:
-                    exit_price = order_book.get_best_yes_bid()[0] if pos.side == OrderSide.YES else order_book.get_best_no_bid()[0]
+                    exit_price = (
+                        order_book.get_best_yes_bid()[0]
+                        if pos.side == OrderSide.YES
+                        else order_book.get_best_no_bid()[0]
+                    )
                     if exit_price is not None:
                         engine = next(
-                            (s.execution_engine for s in strategies if s.ticker == pos.ticker),
+                            (
+                                strat.execution_engine
+                                for strat in strategies
+                                if strat.ticker == pos.ticker
+                            ),
                             strategies[0].execution_engine,
                         )
                         position_manager.set_pending_exit(pos.ticker, pos.side, True)
                         engine.place_order(
-                            ticker=pos.ticker, outcome_side=pos.side.value,
-                            price=exit_price, quantity=pos.quantity, action="sell",
+                            ticker=pos.ticker,
+                            outcome_side=pos.side.value,
+                            price=exit_price,
+                            quantity=pos.quantity,
+                            action="sell",
                         )
 
             take_profit_positions = position_manager.get_take_profit_positions()
@@ -276,18 +305,31 @@ def run_loop():
                 )
                 position_manager.mark_take_profit_tier(pos, tier)
                 if pos.quantity > 0 and strategies:
-                    exit_price = order_book.get_best_yes_bid()[0] if pos.side == OrderSide.YES else order_book.get_best_no_bid()[0]
+                    exit_price = (
+                        order_book.get_best_yes_bid()[0]
+                        if pos.side == OrderSide.YES
+                        else order_book.get_best_no_bid()[0]
+                    )
                     if exit_price is not None:
-                        sell_qty = (pos.quantity * Decimal("0.3")).to_integral_value(rounding="ROUND_HALF_UP")
+                        sell_qty = (pos.quantity * Decimal("0.3")).to_integral_value(
+                            rounding="ROUND_HALF_UP"
+                        )
                         if sell_qty > 0:
                             engine = next(
-                                (s.execution_engine for s in strategies if s.ticker == pos.ticker),
+                                (
+                                    strat.execution_engine
+                                    for strat in strategies
+                                    if strat.ticker == pos.ticker
+                                ),
                                 strategies[0].execution_engine,
                             )
                             position_manager.set_pending_exit(pos.ticker, pos.side, True)
                             engine.place_order(
-                                ticker=pos.ticker, outcome_side=pos.side.value,
-                                price=exit_price, quantity=sell_qty, action="sell",
+                                ticker=pos.ticker,
+                                outcome_side=pos.side.value,
+                                price=exit_price,
+                                quantity=sell_qty,
+                                action="sell",
                             )
 
             for p in position_manager.get_all_positions():
@@ -304,9 +346,7 @@ def run_loop():
                     update_sector_exposure(strategy.sector, float(sector_exposure))
                     triggered = strategy.check_for_new_release(capital, sector_exposure)
                     if triggered:
-                        logger.info(
-                            f"Strategy {strategy.ticker} triggered: Shadow trade logged."
-                        )
+                        logger.info(f"Strategy {strategy.ticker} triggered: Shadow trade logged.")
                         record_strategy_trigger(strategy.indicator, "triggered")
                 except Exception as e:
                     logger.error(f"Strategy {strategy.ticker} check failed: {e}")
@@ -332,8 +372,17 @@ def run_loop():
                 cpu_pct = process.cpu_percent()
                 update_system_memory(int(mem_mb * 1024 * 1024))
                 update_system_cpu(cpu_pct)
+                try:
+                    temps = psutil.sensors_temperatures()
+                    for entries in temps.values():
+                        if entries:
+                            update_system_temperature(entries[0].current)
+                            break
+                except Exception:
+                    logger.debug("Could not read system temperature")
 
                 from data.database import get_db_stats
+
                 db_stats = get_db_stats()
                 update_db_stats(db_stats)
 
@@ -343,7 +392,8 @@ def run_loop():
                 elapsed = now - _shadow_start_time
                 if elapsed >= shadow_auto_approve_sec:
                     logger.info(
-                        f"Shadow mode auto-approval: {elapsed:.0f}s elapsed >= {shadow_auto_approve_sec}s threshold. "
+                        f"Shadow mode auto-approval: {elapsed:.0f}s elapsed "
+                        f">= {shadow_auto_approve_sec}s threshold. "
                         "Switching to live mode."
                     )
                     _shadow_mode_active = False
@@ -378,9 +428,7 @@ def run_loop():
                 except Exception as e:
                     logger.warning(f"Portfolio snapshot failed: {e}")
 
-            total_fees = sum(
-                s.execution_engine.fee_tracker.accumulator for s in strategies
-            )
+            total_fees = sum(strat.execution_engine.fee_tracker.accumulator for strat in strategies)
             logger.info(
                 f"[STATUS REPORT] Capital Balance: ${capital:.2f} | "
                 f"Market YES Bid: ${best_bid_price if best_bid_price else 'N/A'} | "

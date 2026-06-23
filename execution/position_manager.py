@@ -3,6 +3,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
 from config import Config
 from data.database import get_orders_for_position, update_signal_profitability
@@ -32,7 +33,9 @@ class Position:
     take_profit_tier_2_done: bool = False
     pending_exit: bool = False
 
-    def update_on_fill(self, fill_qty: Decimal, fill_price: Decimal, fee: Decimal, rebate: Decimal):
+    def update_on_fill(
+        self, fill_qty: Decimal, fill_price: Decimal, fee: Decimal, rebate: Decimal
+    ) -> None:
         if fill_qty == 0:
             return
 
@@ -70,7 +73,7 @@ class Position:
 
         return pnl
 
-    def update_unrealized(self, current_price: Decimal):
+    def update_unrealized(self, current_price: Decimal) -> None:
         if self.quantity == 0:
             self.unrealized_pnl = Decimal("0")
             return
@@ -87,7 +90,7 @@ class Position:
     def net_fees(self) -> Decimal:
         return self.total_fees - self.total_rebates
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, str]:
         return {
             "ticker": self.ticker,
             "side": self.side.value,
@@ -105,7 +108,7 @@ class Position:
 
 
 class PositionManager:
-    def __init__(self):
+    def __init__(self) -> None:
         self._positions: dict[str, Position] = {}
         self._lock = threading.RLock()
         self._order_machine = get_order_state_machine()
@@ -122,7 +125,7 @@ class PositionManager:
         fill_price: Decimal,
         fee: Decimal,
         rebate: Decimal,
-    ):
+    ) -> None:
         key = self._get_position_key(ticker, side)
 
         with self._lock:
@@ -149,7 +152,7 @@ class PositionManager:
                 f"unrealized_pnl={position.unrealized_pnl}"
             )
 
-    def update_mark_prices(self, prices: dict[str, dict[OrderSide, Decimal]]):
+    def update_mark_prices(self, prices: dict[str, dict[OrderSide, Decimal]]) -> None:
         with self._lock:
             for _key, position in self._positions.items():
                 ticker = position.ticker
@@ -171,11 +174,11 @@ class PositionManager:
 
     def get_total_realized_pnl(self) -> Decimal:
         with self._lock:
-            return sum(p.realized_pnl for p in self._positions.values())
+            return sum(p.realized_pnl for p in self._positions.values())  # type: ignore[return-value]
 
     def get_total_unrealized_pnl(self) -> Decimal:
         with self._lock:
-            return sum(p.unrealized_pnl for p in self._positions.values())
+            return sum(p.unrealized_pnl for p in self._positions.values())  # type: ignore[return-value]
 
     def get_total_pnl(self) -> Decimal:
         return self.get_total_realized_pnl() + self.get_total_unrealized_pnl()
@@ -190,9 +193,9 @@ class PositionManager:
 
     def sync_from_api_positions(
         self,
-        api_positions: list[dict],
+        api_positions: list[dict[str, Any]],
         ticker_to_price: dict[str, dict[OrderSide, Decimal]],
-    ):
+    ) -> None:
         with self._lock:
             self._positions.clear()
             for pos in api_positions:
@@ -220,7 +223,7 @@ class PositionManager:
         with self._lock:
             return sum(
                 p.quantity * p.avg_entry_price for p in self._positions.values() if p.quantity > 0
-            )
+            )  # type: ignore[return-value]
 
     def get_positions_for_stop_loss(self, threshold_pct: Decimal) -> list[Position]:
         with self._lock:
@@ -243,7 +246,11 @@ class PositionManager:
             for p in self._positions.values():
                 if p.quantity <= 0 or p.highest_price <= Decimal("0"):
                     continue
-                current_price = p.avg_entry_price + (p.unrealized_pnl / p.quantity) if p.quantity > 0 else p.avg_entry_price
+                current_price = (
+                    p.avg_entry_price + (p.unrealized_pnl / p.quantity)
+                    if p.quantity > 0
+                    else p.avg_entry_price
+                )
                 drawdown_pct = (p.highest_price - current_price) / p.highest_price
                 if drawdown_pct > trail_pct:
                     triggered.append(p)
@@ -255,7 +262,11 @@ class PositionManager:
             for p in self._positions.values():
                 if p.quantity <= 0 or p.avg_entry_price <= Decimal("0"):
                     continue
-                current_price = p.avg_entry_price + (p.unrealized_pnl / p.quantity) if p.quantity > 0 else p.avg_entry_price
+                current_price = (
+                    p.avg_entry_price + (p.unrealized_pnl / p.quantity)
+                    if p.quantity > 0
+                    else p.avg_entry_price
+                )
                 gain_pct = (current_price - p.avg_entry_price) / p.avg_entry_price
                 tp_tier1 = Config.TAKE_PROFIT_TIER_1_MULTIPLIER
                 tp_tier2 = Config.TAKE_PROFIT_TIER_2_MULTIPLIER
@@ -265,7 +276,7 @@ class PositionManager:
                     tier_hits.append((p, "tier_1"))
             return tier_hits
 
-    def mark_take_profit_tier(self, position: Position, tier: str):
+    def mark_take_profit_tier(self, position: Position, tier: str) -> None:
         with self._lock:
             key = self._get_position_key(position.ticker, position.side)
             pos = self._positions.get(key)
@@ -275,7 +286,7 @@ class PositionManager:
                 elif tier == "tier_2":
                     pos.take_profit_tier_2_done = True
 
-    def set_pending_exit(self, ticker: str, side: OrderSide, pending: bool):
+    def set_pending_exit(self, ticker: str, side: OrderSide, pending: bool) -> None:
         with self._lock:
             key = self._get_position_key(ticker, side)
             pos = self._positions.get(key)
@@ -288,7 +299,7 @@ class PositionManager:
             pos = self._positions.get(key)
             return pos.pending_exit if pos else False
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, Any]:
         with self._lock:
             return {
                 "total_positions": len(self._positions),

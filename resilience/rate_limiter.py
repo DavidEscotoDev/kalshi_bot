@@ -2,16 +2,18 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger("kalshi_bot.rate_limiter")
 
 
-def _update_rate_metric(name: str, tokens: float):
+def _update_rate_metric(name: str, tokens: float) -> None:
     try:
         from observability.metrics import update_rate_limiter_tokens as _fn
+
         _fn(name, tokens)
     except Exception:
-        pass
+        logger.debug("Failed to update rate limiter metric", exc_info=True)
 
 
 @dataclass
@@ -31,7 +33,7 @@ class TokenBucketRateLimiter:
         self._wait_count = 0
         self._total_wait_time = 0.0
 
-    def _refill(self):
+    def _refill(self) -> None:
         now = time.monotonic()
         elapsed = now - self._last_refill
         new_tokens = elapsed * self.config.requests_per_second
@@ -73,7 +75,7 @@ class TokenBucketRateLimiter:
             self._refill()
             return self._tokens
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, Any]:
         with self._lock:
             self._refill()
             return {
@@ -90,12 +92,12 @@ class TokenBucketRateLimiter:
 
 
 class MultiTierRateLimiter:
-    def __init__(self):
+    def __init__(self) -> None:
         self._limiters: dict[str, TokenBucketRateLimiter] = {}
         self._lock = threading.Lock()
         self._global_config = RateLimitConfig()
 
-    def configure_tier(self, name: str, config: RateLimitConfig):
+    def configure_tier(self, name: str, config: RateLimitConfig) -> None:
         with self._lock:
             self._limiters[name] = TokenBucketRateLimiter(name, config)
 
@@ -105,9 +107,7 @@ class MultiTierRateLimiter:
                 self._limiters[name] = TokenBucketRateLimiter(name, self._global_config)
             return self._limiters[name]
 
-    def acquire(
-        self, tier: str, tokens: int = 1, timeout: float | None = None
-    ) -> bool:
+    def acquire(self, tier: str, tokens: int = 1, timeout: float | None = None) -> bool:
         limiter = self.get_limiter(tier)
         return limiter.acquire(tokens, timeout)
 
@@ -115,20 +115,16 @@ class MultiTierRateLimiter:
         limiter = self.get_limiter(tier)
         return limiter.try_acquire(tokens)
 
-    def get_all_stats(self) -> dict:
+    def get_all_stats(self) -> dict[str, Any]:
         with self._lock:
-            return {
-                name: limiter.get_stats() for name, limiter in self._limiters.items()
-            }
+            return {name: limiter.get_stats() for name, limiter in self._limiters.items()}
 
-    def handle_retry_after(self, tier: str, retry_after: float):
+    def handle_retry_after(self, tier: str, retry_after: float) -> None:
         limiter = self.get_limiter(tier)
         with limiter._lock:
             limiter._tokens = 0
             limiter._last_refill = time.monotonic() + retry_after
-        logger.warning(
-            f"Rate limiter '{tier}' backing off for {retry_after}s due to 429 response"
-        )
+        logger.warning(f"Rate limiter '{tier}' backing off for {retry_after}s due to 429 response")
 
 
 _rate_limiter_registry = MultiTierRateLimiter()
@@ -138,7 +134,7 @@ def get_rate_limiter() -> MultiTierRateLimiter:
     return _rate_limiter_registry
 
 
-def configure_default_tiers():
+def configure_default_tiers() -> None:
     _rate_limiter_registry.configure_tier(
         "rest_api", RateLimitConfig(requests_per_second=10.0, burst_size=20)
     )

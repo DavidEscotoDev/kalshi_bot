@@ -1,13 +1,16 @@
+from __future__ import annotations
+
 import base64
 import json
 import logging
 import threading
 import time
 from collections.abc import Callable
+from typing import Any
 
-import websocket
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
+from websocket import WebSocketApp
 
 from config import Config
 from market.order_book import LocalOrderBook
@@ -33,14 +36,14 @@ class KalshiWebSocketClient:
         self,
         ticker: str,
         order_book: LocalOrderBook,
-        on_update_cb: Callable | None = None,
+        on_update_cb: Callable[..., Any] | None = None,
     ):
         Config.validate()
         self.ticker = ticker
         self.order_book = order_book
         self.on_update_cb = on_update_cb
         self.ws_url = Config.get_ws_url()
-        self.ws: websocket.WebSocketApp | None = None
+        self.ws: WebSocketApp | None = None
         self.thread: threading.Thread | None = None
         self.stop_event = threading.Event()
         self.connected_event = threading.Event()
@@ -53,7 +56,7 @@ class KalshiWebSocketClient:
             "websocket", CircuitBreakerConfig(failure_threshold=3, timeout_seconds=60.0)
         )
 
-    def _get_auth_headers(self) -> list:
+    def _get_auth_headers(self) -> list[str]:
         timestamp = str(int(time.time() * 1000))
         path = f"/trade-api/{Config.API_VERSION}/ws"
         message = f"{timestamp}GET{path}".encode()
@@ -61,9 +64,7 @@ class KalshiWebSocketClient:
         private_key = Config.get_private_key()
         signature = private_key.sign(
             message,
-            padding.PSS(
-                mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.DIGEST_LENGTH
-            ),
+            padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.DIGEST_LENGTH),
             hashes.SHA256(),
         )
 
@@ -75,32 +76,33 @@ class KalshiWebSocketClient:
             f"KALSHI-ACCESS-SIGNATURE: {signature_b64}",
         ]
 
-    def connect(self):
+    def connect(self) -> None:
         self.stop_event.clear()
         self.connected_event.clear()
         self._recreate_ws()
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
         self.thread.start()
 
-    def _recreate_ws(self):
+    def _recreate_ws(self) -> None:
         headers = self._get_auth_headers()
         logger.info(f"{'Re' if self.ws else ''}Connecting to Kalshi WebSocket at {self.ws_url}...")
-        self.ws = websocket.WebSocketApp(
+        self.ws = WebSocketApp(
             self.ws_url,
             header=headers,
-            on_open=self._on_open,
-            on_message=self._on_message,
-            on_error=self._on_error,
-            on_close=self._on_close,
+            on_open=self._on_open,  # type: ignore[arg-type]
+            on_message=self._on_message,  # type: ignore[arg-type]
+            on_error=self._on_error,  # type: ignore[arg-type]
+            on_close=self._on_close,  # type: ignore[arg-type]
         )
 
     def wait_for_connection(self, timeout: float = 10.0) -> bool:
         return self.connected_event.wait(timeout=timeout)
 
-    def _run_loop(self):
+    def _run_loop(self) -> None:
         while not self.stop_event.is_set():
             try:
-                self.ws.run_forever(ping_interval=10, ping_timeout=5)
+                if self.ws is not None:
+                    self.ws.run_forever(ping_interval=10, ping_timeout=5)
             except Exception as e:
                 logger.error(f"WebSocket execution error: {e}")
             if not self.stop_event.is_set():
@@ -109,7 +111,7 @@ class KalshiWebSocketClient:
                 record_ws_reconnection()
                 self._recreate_ws()
 
-    def disconnect(self):
+    def disconnect(self) -> None:
         logger.info("Disconnecting WebSocket...")
         self.stop_event.set()
         if self.ws:
@@ -118,7 +120,7 @@ class KalshiWebSocketClient:
             self.thread.join(timeout=2.0)
         update_ws_connection_count(0)
 
-    def _on_open(self, ws):
+    def _on_open(self, ws: WebSocketApp) -> None:
         logger.info("WebSocket connection established. Subscribing...")
         self.connected_event.set()
         update_ws_connection_count(1)
@@ -139,7 +141,7 @@ class KalshiWebSocketClient:
         record_ws_message_sent("subscribe")
         logger.info(f"Subscription messages sent for {self.ticker}")
 
-    def _on_message(self, ws, message_str: str):
+    def _on_message(self, ws: WebSocketApp, message_str: str) -> None:
         try:
             now = time.time()
             self._last_message_time = now
@@ -148,9 +150,7 @@ class KalshiWebSocketClient:
                 record_ws_latency(now - self._last_ping_sent)
 
             if len(message_str) > _MAX_SNAPSHOT_SIZE:
-                logger.warning(
-                    f"Discarding oversized WebSocket message ({len(message_str)} bytes)"
-                )
+                logger.warning(f"Discarding oversized WebSocket message ({len(message_str)} bytes)")
                 return
 
             msg = json.loads(message_str)
@@ -173,16 +173,12 @@ class KalshiWebSocketClient:
                     logger.warning("Discarding delta with non-dict msg content")
                     return
                 if len(message_str) > _MAX_DELTA_SIZE:
-                    logger.warning(
-                        f"Discarding oversized delta message ({len(message_str)} bytes)"
-                    )
+                    logger.warning(f"Discarding oversized delta message ({len(message_str)} bytes)")
                     return
                 self._sequence = msg_content.get("sequence", 0)
                 if self._last_sequence > 0 and self._sequence > self._last_sequence + 1:
                     gap = self._sequence - self._last_sequence - 1
-                    logger.warning(
-                        f"WebSocket sequence gap detected: {gap} messages missed"
-                    )
+                    logger.warning(f"WebSocket sequence gap detected: {gap} messages missed")
                     record_ws_sequence_gap()
                 self._last_sequence = self._sequence
 
@@ -214,7 +210,7 @@ class KalshiWebSocketClient:
         except Exception as e:
             logger.error(f"Error handling WebSocket message: {e}")
 
-    def _on_error(self, ws, error):
+    def _on_error(self, ws: WebSocketApp, error: Exception) -> None:
         message = str(error)
         logger.error(
             "WebSocket client error encountered: %s. "
@@ -223,9 +219,9 @@ class KalshiWebSocketClient:
         )
         self._circuit_breaker.record_failure()
 
-    def _on_close(self, ws, close_status_code, close_msg):
-        logger.info(
-            f"WebSocket connection closed. status={close_status_code}, msg={close_msg}"
-        )
+    def _on_close(
+        self, ws: WebSocketApp, close_status_code: int | None, close_msg: str | None
+    ) -> None:
+        logger.info(f"WebSocket connection closed. status={close_status_code}, msg={close_msg}")
         self.connected_event.clear()
         update_ws_connection_count(0)

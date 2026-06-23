@@ -21,7 +21,7 @@ _HEALTH_SECRET = os.getenv("HEALTH_SECRET", "")
 _DISABLE_HEALTH_AUTH = os.getenv("DISABLE_HEALTH_AUTH", "").lower() in ("1", "true", "yes")
 
 
-def _verify_health_auth(request: Request):
+def _verify_health_auth(request: Request) -> None:
     if _DISABLE_HEALTH_AUTH:
         return
     if not _HEALTH_SECRET:
@@ -64,7 +64,7 @@ def get_system_info() -> dict[str, Any]:
 
 
 @app.get("/health", response_model=HealthResponse)
-async def health(request: Request):
+async def health(request: Request) -> HealthResponse:
     _verify_health_auth(request)
     return HealthResponse(
         status="healthy",
@@ -73,7 +73,7 @@ async def health(request: Request):
 
 
 @app.get("/ready")
-async def readiness(request: Request):
+async def readiness(request: Request) -> Response:
     _verify_health_auth(request)
     checks = {}
     ready = True
@@ -81,9 +81,7 @@ async def readiness(request: Request):
     try:
         cb_registry = CircuitBreakerRegistry()
         cb_stats = cb_registry.get_all_stats()
-        open_breakers = [
-            name for name, stats in cb_stats.items() if stats["state"] == "open"
-        ]
+        open_breakers = [name for name, stats in cb_stats.items() if stats["state"] == "open"]
         checks["circuit_breakers"] = {
             "status": "ok" if not open_breakers else "degraded",
             "open_breakers": open_breakers,
@@ -139,19 +137,20 @@ async def readiness(request: Request):
         checks["database"] = {"status": "error", "error": str(e)}
 
     from fastapi.responses import JSONResponse
+
     resp = ReadinessResponse(ready=ready, checks=checks)
     status_code = 200 if ready else 503
     return JSONResponse(content=resp.model_dump(), status_code=status_code)
 
 
 @app.get("/metrics", response_class=MetricsResponse)
-async def metrics(request: Request):
+async def metrics(request: Request) -> MetricsResponse:
     _verify_health_auth(request)
     return MetricsResponse(content=get_metrics())
 
 
 @app.get("/system")
-async def system_info(request: Request):
+async def system_info(request: Request) -> dict[str, Any]:
     _verify_health_auth(request)
     return get_system_info()
 

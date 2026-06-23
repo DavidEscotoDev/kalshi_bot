@@ -9,10 +9,12 @@ and reports performance metrics.
 """
 
 import argparse
+import contextlib
 import logging
 import os
 import sys
 from decimal import Decimal
+from typing import Any
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -24,12 +26,11 @@ from strategy.forecast_provider import (
     scale_conviction,
 )
 
-
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("backtest")
 
 
-def fetch_fred_history(series_id: str, limit: int = 60) -> list[dict]:
+def fetch_fred_history(series_id: str, limit: int = 60) -> list[dict[str, Any]]:
     from config import Config
 
     if not Config.FRED_API_KEY:
@@ -57,10 +58,8 @@ def fetch_fred_history(series_id: str, limit: int = 60) -> list[dict]:
     for obs in observations:
         val = obs.get("value", "").strip()
         if val not in ("", ".", "NaN"):
-            try:
+            with contextlib.suppress(ValueError):
                 result.append({"date": obs["date"], "value": float(val)})
-            except ValueError:
-                pass
     return result
 
 
@@ -71,7 +70,7 @@ def simulate_trade(
     market_price: Decimal,
     risk_manager: RiskManager,
     total_capital: Decimal,
-) -> dict:
+) -> dict[str, Any]:
     actual_dec = Decimal(str(actual))
     forecast_dec = Decimal(str(forecast))
 
@@ -105,7 +104,7 @@ def run_backtest(
     threshold: float,
     capital: Decimal,
     max_trades: int = 50,
-):
+) -> None:
     logger.info(f"Fetching {limit} observations for {series_id}...")
     history = fetch_fred_history(series_id, limit=max_trades + 12)
 
@@ -118,10 +117,7 @@ def run_backtest(
     )
 
     risk_manager = RiskManager()
-    results = []
-    wins = 0
-    losses = 0
-    total_pnl = Decimal("0")
+    results: list[dict[str, Any]] = []
 
     for i in range(2, len(history)):
         actual = history[i]["value"]
@@ -129,12 +125,11 @@ def run_backtest(
 
         survey_fcst = FredSurveyForecastProvider().get_forecast(indicator, series_id)
         if survey_fcst is not None:
-            forecast = survey_fcst
+            forecast: float = survey_fcst
         else:
             trailing = TrailingAverageForecastProvider()
-            forecast = trailing.get_forecast(indicator, series_id, recent_values=recent_values)
-        if forecast is None:
-            forecast = history[i - 1]["value"]
+            forecast_tmp = trailing.get_forecast(indicator, series_id, recent_values=recent_values)
+            forecast = forecast_tmp if forecast_tmp is not None else history[i - 1]["value"]
 
         std_dev = compute_surprise_std(recent_values)
         surprise = abs(actual - forecast)

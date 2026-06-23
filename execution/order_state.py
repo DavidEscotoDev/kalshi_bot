@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import Enum
+from typing import Any
 
 logger = logging.getLogger("kalshi_bot.order_state")
 
@@ -78,9 +79,7 @@ class Order:
         }
         return new_state in valid_transitions.get(self.state, set())
 
-    def transition_to(
-        self, new_state: OrderState, error_message: str | None = None
-    ) -> bool:
+    def transition_to(self, new_state: OrderState, error_message: str | None = None) -> bool:
         if not self.can_transition_to(new_state):
             logger.warning(
                 f"Invalid state transition for order {self.id}: {self.state} -> {new_state}"
@@ -117,11 +116,12 @@ class Order:
             self.price = price
 
         logger.info(
-            f"Order {self.id} filled {fill_qty} @ {self.price}, total filled: {self.filled_quantity}"
+            f"Order {self.id} filled {fill_qty} @ {self.price}, "
+            f"total filled: {self.filled_quantity}"
         )
         return fill_qty
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "client_order_id": self.client_order_id,
@@ -132,20 +132,12 @@ class Order:
             "quantity": str(self.quantity),
             "filled_quantity": str(self.filled_quantity),
             "state": self.state.value,
-            "created_at": datetime.fromtimestamp(
-                self.created_at, tz=UTC
-            ).isoformat(),
-            "updated_at": datetime.fromtimestamp(
-                self.updated_at, tz=UTC
-            ).isoformat(),
-            "submitted_at": datetime.fromtimestamp(
-                self.submitted_at, tz=UTC
-            ).isoformat()
+            "created_at": datetime.fromtimestamp(self.created_at, tz=UTC).isoformat(),
+            "updated_at": datetime.fromtimestamp(self.updated_at, tz=UTC).isoformat(),
+            "submitted_at": datetime.fromtimestamp(self.submitted_at, tz=UTC).isoformat()
             if self.submitted_at
             else None,
-            "filled_at": datetime.fromtimestamp(
-                self.filled_at, tz=UTC
-            ).isoformat()
+            "filled_at": datetime.fromtimestamp(self.filled_at, tz=UTC).isoformat()
             if self.filled_at
             else None,
             "error_message": self.error_message,
@@ -157,10 +149,10 @@ class Order:
 
 
 class OrderStateMachine:
-    def __init__(self):
+    def __init__(self) -> None:
         self._orders: dict[str, Order] = {}
         self._lock = threading.RLock()
-        self._state_change_callbacks: dict[OrderState, list] = {
+        self._state_change_callbacks: dict[OrderState, list[Callable[[Order], None]]] = {
             state: [] for state in OrderState
         }
 
@@ -194,7 +186,8 @@ class OrderStateMachine:
             self._orders[order_id] = order
 
         logger.info(
-            f"Created order {order_id} for {ticker} {side.value} {action.value} {quantity} @ {price}"
+            f"Created order {order_id} for {ticker} "
+            f"{side.value} {action.value} {quantity} @ {price}"
         )
         return order
 
@@ -223,9 +216,7 @@ class OrderStateMachine:
                 self._trigger_callbacks(order)
             return success
 
-    def fill_order(
-        self, order_id: str, quantity: Decimal, price: Decimal | None = None
-    ) -> Decimal:
+    def fill_order(self, order_id: str, quantity: Decimal, price: Decimal | None = None) -> Decimal:
         with self._lock:
             order = self._orders.get(order_id)
             if not order:
@@ -238,36 +229,77 @@ class OrderStateMachine:
     def reject_order(self, order_id: str, error_message: str) -> bool:
         return self.transition(order_id, OrderState.REJECTED, error_message)
 
-    def get_orders_by_state(self, state: OrderState) -> list:
+    def get_orders_by_state(self, state: OrderState) -> list[Order]:
         with self._lock:
             return [o for o in self._orders.values() if o.state == state]
 
-    def get_open_orders(self) -> list:
+    def get_open_orders(self) -> list[Order]:
         with self._lock:
             return [
                 o
                 for o in self._orders.values()
-                if o.state
-                in (OrderState.PENDING, OrderState.SUBMITTED, OrderState.PARTIAL)
+                if o.state in (OrderState.PENDING, OrderState.SUBMITTED, OrderState.PARTIAL)
             ]
 
-    def get_orders_for_ticker(self, ticker: str) -> list:
+    def get_orders_for_ticker(self, ticker: str) -> list[Order]:
         with self._lock:
             return [o for o in self._orders.values() if o.ticker == ticker]
 
-    def register_callback(self, state: OrderState, callback: Callable[[Order], None]):
+    def register_callback(self, state: OrderState, callback: Callable[[Order], None]) -> None:
         self._state_change_callbacks[state].append(callback)
 
-    def _trigger_callbacks(self, order: Order):
+    def _trigger_callbacks(self, order: Order) -> None:
         for callback in self._state_change_callbacks.get(order.state, []):
             try:
                 callback(order)
             except Exception as e:
-                logger.error(
-                    f"Error in state change callback for order {order.id}: {e}"
-                )
+                logger.error(f"Error in state change callback for order {order.id}: {e}")
 
-    def get_stats(self) -> dict:
+    def restore_from_db(self, orders_data: list[dict[str, Any]]) -> int:
+        count = 0
+        with self._lock:
+            for od in orders_data:
+                cid = od.get("client_order_id", "")
+                if cid in {o.client_order_id for o in self._orders.values()}:
+                    continue
+                side_str = od.get("outcome_side", "yes")
+                action_str = od.get("action", "buy")
+                price_raw = od.get("price")
+                quantity_raw = od.get("quantity")
+                if price_raw is None or quantity_raw is None or action_str is None:
+                    logger.warning(
+                        f"Skipping corrupt order row (client_order_id={cid}): "
+                        f"missing price/quantity/action"
+                    )
+                    continue
+                try:
+                    price = Decimal(str(price_raw))
+                    quantity = Decimal(str(quantity_raw))
+                    action = OrderAction(action_str)
+                    state = OrderState(od.get("status", "pending"))
+                except (ValueError, TypeError) as e:
+                    logger.warning(
+                        f"Skipping corrupt order row (client_order_id={cid}): {e}"
+                    )
+                    continue
+                order = Order(
+                    id=str(uuid.uuid4()),
+                    client_order_id=cid,
+                    ticker=od.get("ticker", ""),
+                    side=OrderSide.YES if side_str == "yes" else OrderSide.NO,
+                    action=action,
+                    price=price,
+                    quantity=quantity,
+                    kalshi_order_id=od.get("kalshi_order_id"),
+                    state=state,
+                )
+                self._orders[order.id] = order
+                count += 1
+        if count:
+            logger.info(f"Restored {count} open orders from database")
+        return count
+
+    def get_stats(self) -> dict[str, Any]:
         with self._lock:
             stats = {state.value: 0 for state in OrderState}
             for order in self._orders.values():

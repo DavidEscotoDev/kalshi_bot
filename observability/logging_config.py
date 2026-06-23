@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import sys
 import threading
@@ -8,9 +10,7 @@ from typing import Any
 
 from pythonjsonlogger import jsonlogger
 
-correlation_id_var: ContextVar[str | None] = ContextVar(
-    "correlation_id", default=None
-)
+correlation_id_var: ContextVar[str | None] = ContextVar("correlation_id", default=None)
 module_levels: dict[str, int] = {}
 
 
@@ -24,14 +24,20 @@ class CorrelationIdFilter(logging.Filter):
         return True
 
 
-_SENSITIVE_KEYS = frozenset({
-    "KALSHI_API_KEY_ID", "KALSHI_PRIVATE_KEY_PATH", "FRED_API_KEY",
-    "KALSHI_ACCESS_KEY", "KALSHI_ACCESS_SECRET", "ALPHA_VANTAGE_API_KEY",
-})
+_SENSITIVE_KEYS = frozenset(
+    {
+        "KALSHI_API_KEY_ID",
+        "KALSHI_PRIVATE_KEY_PATH",
+        "FRED_API_KEY",
+        "KALSHI_ACCESS_KEY",
+        "KALSHI_ACCESS_SECRET",
+        "ALPHA_VANTAGE_API_KEY",
+    }
+)
 
 
 class StructuredJsonFormatter(jsonlogger.JsonFormatter):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
 
     def add_fields(
@@ -39,11 +45,9 @@ class StructuredJsonFormatter(jsonlogger.JsonFormatter):
         log_record: dict[str, Any],
         record: logging.LogRecord,
         message_dict: dict[str, Any],
-    ):
+    ) -> None:
         super().add_fields(log_record, record, message_dict)
-        log_record["timestamp"] = datetime.now(UTC).isoformat(
-            timespec="milliseconds"
-        )
+        log_record["timestamp"] = datetime.now(UTC).isoformat(timespec="milliseconds")
         log_record["level"] = record.levelname
         log_record["logger"] = record.name
         log_record["correlation_id"] = getattr(record, "correlation_id", "-")
@@ -62,7 +66,7 @@ def setup_structured_logging(
     level: str = "INFO",
     log_file: str | None = None,
     module_levels_config: dict[str, str] | None = None,
-):
+) -> None:
     root_logger = logging.getLogger()
     root_logger.setLevel(getattr(logging, level.upper()))
 
@@ -77,9 +81,7 @@ def setup_structured_logging(
     if log_file:
         from logging.handlers import RotatingFileHandler
 
-        file_handler = RotatingFileHandler(
-            log_file, maxBytes=10 * 1024 * 1024, backupCount=5
-        )
+        file_handler = RotatingFileHandler(log_file, maxBytes=10 * 1024 * 1024, backupCount=5)
         file_handler.setFormatter(StructuredJsonFormatter())
         file_handler.addFilter(CorrelationIdFilter())
         root_logger.addHandler(file_handler)
@@ -100,28 +102,28 @@ def get_correlation_id() -> str | None:
     return correlation_id_var.get()
 
 
-def clear_correlation_id():
+def clear_correlation_id() -> None:
     correlation_id_var.set(None)
 
 
 class LogContext:
-    def __init__(self, **extra_fields):
+    def __init__(self, **extra_fields: Any) -> None:
         self.extra_fields = extra_fields
         self.old_cid = get_correlation_id()
 
-    def __enter__(self):
+    def __enter__(self) -> LogContext:
         if "correlation_id" in self.extra_fields:
             set_correlation_id(self.extra_fields["correlation_id"])
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         if self.old_cid:
             set_correlation_id(self.old_cid)
         else:
             clear_correlation_id()
 
 
-def log_with_context(logger: logging.Logger, level: int, message: str, **extra_fields):
+def log_with_context(logger: logging.Logger, level: int, message: str, **extra_fields: Any) -> None:
     extra = {"extra_fields": extra_fields}
     logger.log(level, message, extra=extra)
 

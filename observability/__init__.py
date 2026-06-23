@@ -22,7 +22,6 @@ from observability.metrics import (
     REGISTRY,
     get_content_type,
     get_metrics,
-    push_to_gateway as push_metrics_to_gateway,
     record_dlq_processed,
     record_kill_switch_triggered,
     record_order_latency,
@@ -49,6 +48,9 @@ from observability.metrics import (
     update_var_usage,
     update_ws_connection_count,
     update_ws_last_message_time,
+)
+from observability.metrics import (
+    push_to_gateway as push_metrics_to_gateway,
 )
 
 __all__ = [

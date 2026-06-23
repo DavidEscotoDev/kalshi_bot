@@ -1,6 +1,7 @@
 import logging
 import time
 from decimal import Decimal
+from typing import Any
 
 from config import Config, sign_kalshi_headers
 from data.audit_log import get_audit_logger
@@ -11,7 +12,7 @@ logger = logging.getLogger("kalshi_bot.kill_switch")
 
 
 class KillSwitch:
-    def __init__(self):
+    def __init__(self) -> None:
         Config.validate()
         self.api_key_id = Config.API_KEY_ID
         self.private_key = Config.get_private_key()
@@ -25,11 +26,11 @@ class KillSwitch:
         )
         self._rate_limiter = get_rate_limiter().get_limiter("rest_api")
 
-    def sign_headers(self, method: str, path: str) -> dict:
-        return sign_kalshi_headers(self.api_key_id, self.private_key, method, path)
+    def sign_headers(self, method: str, path: str) -> dict[str, str]:
+        return sign_kalshi_headers(self.api_key_id, self.private_key, method, path)  # type: ignore[arg-type]
 
     def get_balance(self) -> Decimal:
-        def _do_request():
+        def _do_request() -> Any:
             if not self._rate_limiter.acquire(timeout=30.0):
                 raise RuntimeError("Rate limiter timeout")
 
@@ -56,13 +57,14 @@ class KillSwitch:
 
             raise ValueError(f"Kalshi API response missing 'balance_dollars': {data}")
 
-        return self._circuit_breaker.call(_do_request)
+        return self._circuit_breaker.call(_do_request)  # type: ignore[no-any-return]
 
     def cancel_all_orders(self) -> int:
         from observability.metrics import record_kill_switch_triggered
+
         record_kill_switch_triggered()
 
-        def _do_cancel():
+        def _do_cancel() -> int:
             logger.warning("Initiating platform-wide order cancellation...")
             get_audit_logger().log_kill_switch("manual_or_triggered_cancel")
 
@@ -102,7 +104,9 @@ class KillSwitch:
                     continue
 
                 if not self._rate_limiter.acquire(timeout=30.0):
-                    logger.error("Rate limiter timeout during cancel, aborting further cancellations")
+                    logger.error(
+                        "Rate limiter timeout during cancel, aborting further cancellations"
+                    )
                     break
 
                 cancel_path = f"{api_prefix}/portfolio/orders/{order_id}"
@@ -123,24 +127,27 @@ class KillSwitch:
                     logger.error(f"Failed to cancel order {order_id}: {cancel_resp.text}")
 
             logger.warning(
-                f"Kill Switch action completed. Cancelled {cancelled_count} out of {len(orders)} orders."
+                f"Kill Switch action completed. Cancelled {cancelled_count} "
+                f"out of {len(orders)} orders."
             )
             return cancelled_count
 
         return self._circuit_breaker.call(_do_cancel, bypass=True)
 
-    def check_and_trigger_with_capital(self) -> tuple:
+    def check_and_trigger_with_capital(self) -> tuple[bool, Decimal]:
         try:
             balance = self.get_cached_balance()
             self._last_check_time = time.time()
 
             logger.info(
-                f"Current available balance: ${balance:.2f} (Limit: ${Config.KILL_SWITCH_MIN_BALANCE:.2f})"
+                f"Current available balance: ${balance:.2f} "
+                f"(Limit: ${Config.KILL_SWITCH_MIN_BALANCE:.2f})"
             )
 
             if balance < Config.KILL_SWITCH_MIN_BALANCE:
                 logger.critical(
-                    f"BALANCE CRITICAL: ${balance:.2f} is below limit of ${Config.KILL_SWITCH_MIN_BALANCE:.2f}! "
+                    f"BALANCE CRITICAL: ${balance:.2f} is below limit of "
+                    f"${Config.KILL_SWITCH_MIN_BALANCE:.2f}! "
                     f"TRIGGERING KILL SWITCH!"
                 )
                 self.cancel_all_orders()
@@ -153,8 +160,8 @@ class KillSwitch:
             self.cancel_all_orders()
             return True, Decimal("0")
 
-    def get_positions(self) -> list[dict]:
-        def _do_request():
+    def get_positions(self) -> list[dict[str, Any]]:
+        def _do_request() -> list[dict[str, Any]]:
             if not self._rate_limiter.acquire(timeout=30.0):
                 raise RuntimeError("Rate limiter timeout")
 

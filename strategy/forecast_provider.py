@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import logging
 from abc import ABC, abstractmethod
 from decimal import Decimal
-from typing import Optional
+from typing import Any
 
 from config import Config
 
@@ -10,12 +12,13 @@ logger = logging.getLogger("kalshi_bot.forecast")
 
 class EconomicDataProvider(ABC):
     @abstractmethod
-    def fetch_latest_observation(self, indicator: str) -> dict:
+    def fetch_latest_observation(self, indicator: str) -> dict[str, Any]:
         pass
 
 
 class ForecastProvider(ABC):
-    def get_forecast(self, indicator: str, series_id: str, **kwargs) -> Optional[float]:
+    @abstractmethod
+    def get_forecast(self, indicator: str, series_id: str, **kwargs: Any) -> float | None:
         raise NotImplementedError
 
 
@@ -26,17 +29,17 @@ class FredSurveyForecastProvider(ForecastProvider):
         "FOMC": "FEDFUNDS",
     }
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.api_key = Config.FRED_API_KEY
         self.base_url = "https://api.stlouisfed.org/fred/series/observations"
 
-    def get_forecast(self, indicator: str, series_id: str) -> Optional[float]:
+    def get_forecast(self, indicator: str, series_id: str, **kwargs: Any) -> float | None:
         survey_series = self.SURVEY_MAPPING.get(indicator.upper())
         if not survey_series or not self.api_key:
             return None
         return self._fetch_survey_value(survey_series)
 
-    def _fetch_survey_value(self, series_id: str) -> Optional[float]:
+    def _fetch_survey_value(self, series_id: str) -> float | None:
         try:
             session = Config.get_verified_session()
             response = Config.request_with_retry(
@@ -68,7 +71,7 @@ class TrailingAverageForecastProvider(ForecastProvider):
     def __init__(self, window: int = 6):
         self.window = window
 
-    def get_forecast(self, indicator: str, series_id: str, **kwargs) -> Optional[float]:
+    def get_forecast(self, indicator: str, series_id: str, **kwargs: Any) -> float | None:
         recent_values = kwargs.get("recent_values", [])
         if not recent_values or len(recent_values) < 2:
             return None
@@ -85,11 +88,11 @@ class AlphaVantageEconomicProvider(EconomicDataProvider):
         "FOMC": "FEDERAL_FUNDS_RATE",
     }
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.api_key = Config.ALPHA_VANTAGE_API_KEY
         self.base_url = "https://www.alphavantage.co/query"
 
-    def fetch_latest_observation(self, indicator: str) -> dict:
+    def fetch_latest_observation(self, indicator: str) -> dict[str, Any]:
         series = self.SERIES_MAPPING.get(indicator.upper())
         if not series or not self.api_key:
             return {}
@@ -117,8 +120,14 @@ class AlphaVantageEconomicProvider(EconomicDataProvider):
                             return {
                                 "date": latest.get("date", ""),
                                 "value": val,
-                                "previous": _safe_parse_float(obs[1].get("value")) if len(obs) > 1 else None,
-                                "all_values": [_safe_parse_float(o.get("value")) for o in obs if _safe_parse_float(o.get("value")) is not None],
+                                "previous": _safe_parse_float(obs[1].get("value"))
+                                if len(obs) > 1
+                                else None,
+                                "all_values": [
+                                    _safe_parse_float(o.get("value"))
+                                    for o in obs
+                                    if _safe_parse_float(o.get("value")) is not None
+                                ],
                             }
             else:
                 logger.warning(f"Alpha Vantage returned {response.status_code}: {response.text}")
@@ -128,7 +137,7 @@ class AlphaVantageEconomicProvider(EconomicDataProvider):
         return {}
 
 
-def _safe_parse_float(value) -> float | None:
+def _safe_parse_float(value: Any) -> float | None:
     if value is None:
         return None
     if isinstance(value, (int, float)):
