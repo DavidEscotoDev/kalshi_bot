@@ -20,7 +20,7 @@ class KillSwitch:
         self._BALANCE_CACHE_TTL = 5.0
 
     def sign_headers(self, method: str, path: str) -> dict[str, str]:
-        return sign_kalshi_headers(self.api_key_id, self.private_key, method, path)
+        return sign_kalshi_headers(self.api_key_id, self.private_key, method, path)  # type: ignore[arg-type]
 
     def get_balance(self) -> Decimal:
         path = f"/trade-api/{Config.API_VERSION}/portfolio/balance"

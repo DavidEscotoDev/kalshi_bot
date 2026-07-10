@@ -61,7 +61,7 @@ class ExecutionEngine:
     def sign_headers(self, method: str, path: str) -> dict[str, str]:
         if not self.private_key:
             self.private_key = Config.get_private_key()
-        return sign_kalshi_headers(self.api_key_id, self.private_key, method, path)
+        return sign_kalshi_headers(self.api_key_id, self.private_key, method, path)  # type: ignore[arg-type]
 
     def _record_fill(self, price: Decimal, quantity: Decimal, is_buy: bool = True) -> dict:
         actual_value = price * quantity
@@ -191,7 +191,9 @@ class ExecutionEngine:
                         "price": price_str,
                         "quantity": qty_str,
                         "outcome_side": outcome_side_lower,
-                        "synthetic_ask": float(synthetic_ask) if synthetic_ask is not None else None,
+                        "synthetic_ask": (
+                            float(synthetic_ask) if synthetic_ask is not None else None
+                        ),
                         "fee_accumulator": float(self.fee_accumulator),
                     }
                 )
