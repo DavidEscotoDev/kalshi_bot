@@ -312,22 +312,6 @@ def log_shadow_trade(
     return trade_id  # type: ignore[return-value]
 
 
-def log_market_data(
-    ticker: str, timestamp: str, best_bid: float, best_ask: float, source: str
-) -> None:
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO market_data_history (ticker, timestamp, best_bid, best_ask, source)
-        VALUES (?, ?, ?, ?, ?)
-    """,
-        (ticker, timestamp, best_bid, best_ask, source),
-    )
-    conn.commit()
-    conn.close()
-
-
 def has_active_order(ticker: str, side: str, price: float, action: str) -> bool:
     conn = get_connection()
     cursor = conn.cursor()
@@ -423,25 +407,6 @@ def get_open_db_orders() -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
-def get_orders_for_position(ticker: str, side: str) -> list[dict[str, Any]]:
-    conn = get_connection()
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT id, client_order_id, ticker, status, action, outcome_side,
-               price, quantity, signal_id, kalshi_order_id, created_at
-        FROM orders
-        WHERE ticker = ? AND outcome_side = ?
-        ORDER BY created_at ASC
-    """,
-        (ticker, side),
-    )
-    rows = cursor.fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-
 def log_strategy_signal(
     indicator: str,
     forecast_value: float | None = None,
@@ -484,26 +449,6 @@ def log_strategy_signal(
     conn.commit()
     conn.close()
     return sig_id  # type: ignore[return-value]
-
-
-def update_signal_profitability(signal_id: int, profitable: bool) -> None:
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT profitable FROM strategy_signals WHERE id = ?", (signal_id,))
-    row = cursor.fetchone()
-    current = row[0] if row else None
-    if current is None:
-        profitable_val = int(profitable)
-    elif current == 0 and profitable:
-        profitable_val = 1
-    else:
-        profitable_val = current
-    cursor.execute(
-        "UPDATE strategy_signals SET profitable = ? WHERE id = ?",
-        (profitable_val, signal_id),
-    )
-    conn.commit()
-    conn.close()
 
 
 def get_strategy_performance_summary(
@@ -598,33 +543,4 @@ def vacuum_database() -> None:
     logger.info("Database vacuum completed.")
 
 
-def get_db_stats() -> dict[str, Any]:
-    conn = get_connection()
-    cursor = conn.cursor()
-    tables = [
-        "macro_releases",
-        "shadow_trades",
-        "market_data_history",
-        "strategy_signals",
-        "orders",
-        "portfolio_snapshots",
-    ]
-    stats = {}
-    for table in tables:
-        try:
-            cursor.execute(f"SELECT COUNT(*) FROM {table}")  # noqa: S608
-            stats[table] = cursor.fetchone()[0]
-        except sqlite3.OperationalError:
-            stats[table] = 0
 
-    try:
-        cursor.execute("PRAGMA page_count")
-        pages = cursor.fetchone()[0]
-        cursor.execute("PRAGMA page_size")
-        page_size = cursor.fetchone()[0]
-        stats["db_size_bytes"] = pages * page_size
-    except sqlite3.OperationalError:
-        stats["db_size_bytes"] = 0
-
-    conn.close()
-    return stats

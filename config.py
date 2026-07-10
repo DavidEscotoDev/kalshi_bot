@@ -4,7 +4,6 @@ import os
 import stat
 import time
 from decimal import Decimal
-from typing import Any
 
 import certifi
 import requests
@@ -15,26 +14,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 logger = logging.getLogger("kalshi_bot.config")
-
-_DOCKER_SECRETS_DIR = "/run/secrets"
-if os.path.isdir(_DOCKER_SECRETS_DIR):
-    for secret_file in os.listdir(_DOCKER_SECRETS_DIR):
-        secret_path = os.path.join(_DOCKER_SECRETS_DIR, secret_file)
-        if os.path.isfile(secret_path):
-            try:
-                env_key = secret_file.upper().replace("-", "_")
-                if env_key not in os.environ:
-                    with open(secret_path) as f:
-                        os.environ[env_key] = f.read().strip()
-            except OSError as e:
-                logger.warning(f"Docker secret {secret_file} could not be read: {e}")
-
-_SENSITIVE_ENV_KEYS = {
-    "KALSHI_API_KEY_ID",
-    "KALSHI_PRIVATE_KEY_PATH",
-    "FRED_API_KEY",
-    "ALPHA_VANTAGE_API_KEY",
-}
 
 
 class Config:
@@ -64,13 +43,6 @@ class Config:
     MAX_SPREAD_PCT = Decimal(os.getenv("MAX_SPREAD_PCT", "0.05"))
 
     ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY", "")
-
-    TRAILING_STOP_PCT = Decimal(os.getenv("TRAILING_STOP_PCT", "0.10"))
-    TAKE_PROFIT_TIER_1_MULTIPLIER = Decimal(os.getenv("TAKE_PROFIT_TIER_1_MULTIPLIER", "2.0"))
-    TAKE_PROFIT_TIER_1_FRACTION = Decimal(os.getenv("TAKE_PROFIT_TIER_1_FRACTION", "0.50"))
-    TAKE_PROFIT_TIER_2_MULTIPLIER = Decimal(os.getenv("TAKE_PROFIT_TIER_2_MULTIPLIER", "3.0"))
-    TAKE_PROFIT_TIER_2_FRACTION = Decimal(os.getenv("TAKE_PROFIT_TIER_2_FRACTION", "0.75"))
-    POSITION_REBALANCE_INTERVAL_SEC = float(os.getenv("POSITION_REBALANCE_INTERVAL_SEC", "300.0"))
 
     TRADE_COOLDOWN_SEC = float(os.getenv("TRADE_COOLDOWN_SEC", "3600.0"))
 
@@ -150,27 +122,6 @@ class Config:
         return f"{cls.API_BASE_PATH}/{path}"
 
     @classmethod
-    def verify_api_compat(cls) -> bool:
-        try:
-            session = cls.get_verified_session()
-            response = cls.request_with_retry(
-                method="GET",
-                url=f"{cls.get_rest_url()}/{cls.API_BASE_PATH.replace('/trade-api/', '')}",
-                session=session,
-                timeout=5.0,
-                max_attempts=1,
-            )
-            if response.status_code < 500:
-                return True
-            logging.getLogger("kalshi_bot.config").warning(
-                f"API version check returned {response.status_code}"
-            )
-            return False
-        except Exception as e:
-            logger.warning(f"API version check failed: {e}")
-            return False
-
-    @classmethod
     def get_verified_session(cls) -> requests.Session:
         if cls._session is None:
             cls._session = requests.Session()
@@ -183,10 +134,9 @@ class Config:
         return cls._session
 
     @classmethod
-    def request_with_retry(cls, method: str, url: str, **kwargs: Any) -> requests.Response:
+    def request_with_retry(cls, method: str, url: str, **kwargs) -> requests.Response:
         max_attempts = int(kwargs.pop("max_attempts", cls.RETRY_MAX_ATTEMPTS))
         backoff = float(kwargs.pop("backoff", cls.RETRY_BACKOFF_SEC))
-        rate_limiter_tier = kwargs.pop("rate_limiter_tier", None)
 
         kwargs.setdefault("timeout", cls.REQUEST_TIMEOUT_SEC)
         if "session" not in kwargs:
@@ -194,15 +144,6 @@ class Config:
 
         session = kwargs.pop("session")
         last_error = None
-
-        if rate_limiter_tier:
-            try:
-                from resilience.rate_limiter import get_rate_limiter
-
-                if not get_rate_limiter().acquire(rate_limiter_tier, timeout=30.0):
-                    raise RuntimeError(f"Rate limiter timeout for tier {rate_limiter_tier}")
-            except RuntimeError:
-                raise
 
         for attempt in range(1, max_attempts + 1):
             try:

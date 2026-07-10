@@ -144,14 +144,12 @@ class AuditLogger:
         return removed
 
 
-_instance = None
-_instance_lock = threading.Lock()
+# ponytail: module-level singleton, double-checked locking not needed for single-process bot
+_audit_logger: AuditLogger | None = None
 
 
 def get_audit_logger() -> AuditLogger:
-    global _instance
-    if _instance is None:
-        with _instance_lock:
-            if _instance is None:
-                _instance = AuditLogger()
-    return _instance
+    global _audit_logger
+    if _audit_logger is None:
+        _audit_logger = AuditLogger()
+    return _audit_logger

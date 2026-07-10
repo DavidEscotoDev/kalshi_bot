@@ -1,11 +1,9 @@
 import json
 import logging
 import os
-import time
 import uuid
 from datetime import UTC, datetime
-from decimal import Decimal
-from typing import Any
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 
 from cryptography.hazmat.primitives.asymmetric import rsa
 
@@ -18,26 +16,8 @@ from data.database import (
     store_order,
     update_order_status,
 )
-from execution.fee_tracker import FeeAccumulatorTracker
-from execution.order_state import (
-    OrderAction,
-    OrderSide,
-    OrderState,
-    OrderStateMachine,
-    get_order_state_machine,
-)
-from execution.position_manager import get_position_manager
-from observability.metrics import (
-    record_order_latency,
-    record_order_placed,
-    record_order_rejected,
-    record_shadow_trade,
-)
-from resilience.circuit_breaker import CircuitBreakerConfig, CircuitBreakerRegistry
-from resilience.dead_letter_queue import get_dlq_registry
-from resilience.rate_limiter import get_rate_limiter
 
-_SHADOW_LOGGER = None
+_SHADOW_LOGGER: logging.Logger | None = None
 
 
 def _get_shadow_logger() -> logging.Logger:
@@ -59,15 +39,6 @@ def _get_shadow_logger() -> logging.Logger:
     return _SHADOW_LOGGER
 
 
-def _close_shadow_logger() -> None:
-    global _SHADOW_LOGGER
-    if _SHADOW_LOGGER is not None:
-        for h in _SHADOW_LOGGER.handlers[:]:
-            h.close()
-            _SHADOW_LOGGER.removeHandler(h)
-        _SHADOW_LOGGER = None
-
-
 logger = logging.getLogger("kalshi_bot.execution")
 
 
@@ -77,19 +48,9 @@ class ExecutionEngine:
         self.api_key_id = Config.API_KEY_ID
         self.private_key: rsa.RSAPrivateKey | None = None
         self.base_url = Config.get_rest_url()
-        self.fee_tracker = FeeAccumulatorTracker()
-        self._shadow_mode_override: bool | None = None
 
-        self._circuit_breaker = CircuitBreakerRegistry().get_or_create(
-            "rest_api", CircuitBreakerConfig(failure_threshold=5, timeout_seconds=30.0)
-        )
-        self._rate_limiter = get_rate_limiter().get_limiter("rest_api")
-        self._dlq = get_dlq_registry().get_or_create("order_placement")
-        self._order_machine = get_order_state_machine()
-        self._position_manager = get_position_manager()
-
-    def set_shadow_mode(self, shadow: bool | None) -> None:
-        self._shadow_mode_override = shadow
+        # ponytail: inline fee accumulator instead of separate FeeAccumulatorTracker
+        self.fee_accumulator = Decimal("0.000000")
 
     def format_price(self, price: Decimal) -> str:
         return f"{price:.4f}"
@@ -97,84 +58,38 @@ class ExecutionEngine:
     def format_quantity(self, quantity: Decimal) -> str:
         return str(int(quantity.to_integral_value(rounding="ROUND_HALF_UP")))
 
-    def poll_order_statuses(self, kill_switch: Any) -> None:
-        open_orders = self._order_machine.get_open_orders()
-        if not open_orders:
-            return
-        logger.info(f"Polling Kalshi API for {len(open_orders)} open order statuses...")
-        for order in open_orders:
-            if not order.kalshi_order_id:
-                continue
-            try:
-                path = f"/trade-api/{Config.API_VERSION}/portfolio/orders/{order.kalshi_order_id}"
-                url = f"{self.base_url}{path}"
-                headers = self.sign_headers("GET", path)
-
-                if not self._rate_limiter.acquire(timeout=10.0):
-                    continue
-
-                session = Config.get_verified_session()
-                response = Config.request_with_retry(
-                    method="GET",
-                    url=url,
-                    headers=headers,
-                    session=session,
-                    timeout=Config.REQUEST_TIMEOUT_SEC,
-                )
-                if response.status_code != 200:
-                    continue
-
-                data = response.json()
-                api_status = data.get("status", "")
-                if api_status in ("filled", "cancelled", "expired", "rejected"):
-                    if api_status == "filled":
-                        remaining = order.quantity - order.filled_quantity
-                        if remaining > 0:
-                            self._order_machine.fill_order(order.id, remaining, order.price)
-                            self._position_manager.on_order_fill(
-                                ticker=order.ticker,
-                                side=order.side,
-                                action=order.action,
-                                fill_qty=remaining,
-                                fill_price=order.price,
-                                fee=Decimal("0"),
-                                rebate=Decimal("0"),
-                            )
-                    else:
-                        self._order_machine.transition(order.id, OrderState(api_status))
-            except Exception as e:
-                logger.debug(f"Order poll failed for {order.kalshi_order_id}: {e}")
-
     def sign_headers(self, method: str, path: str) -> dict[str, str]:
         if not self.private_key:
             self.private_key = Config.get_private_key()
-        return sign_kalshi_headers(self.api_key_id, self.private_key, method, path)  # type: ignore[arg-type]
+        return sign_kalshi_headers(self.api_key_id, self.private_key, method, path)
 
-    def _place_order_with_resilience(
-        self, path: str, url: str, headers: dict[str, str], payload: dict[str, Any]
-    ) -> Any:
-        def _do_request() -> Any:
-            if not self._rate_limiter.acquire(timeout=30.0):
-                raise RuntimeError("Rate limiter timeout")
+    def _record_fill(self, price: Decimal, quantity: Decimal, is_buy: bool = True) -> dict:
+        actual_value = price * quantity
+        actual_value_cents = actual_value * Decimal("100.0")
 
-            session = Config.get_verified_session()
-            response = Config.request_with_retry(
-                method="POST",
-                url=url,
-                json=payload,
-                headers=headers,
-                session=session,
-                timeout=Config.REQUEST_TIMEOUT_SEC,
-            )
+        if is_buy:
+            rounded_cents = actual_value_cents.quantize(Decimal("1"), rounding=ROUND_CEILING)
+            rounded_value = rounded_cents / Decimal("100.0")
+            overpayment = rounded_value - actual_value
+        else:
+            rounded_cents = actual_value_cents.quantize(Decimal("1"), rounding=ROUND_FLOOR)
+            rounded_value = rounded_cents / Decimal("100.0")
+            overpayment = actual_value - rounded_value
 
-            if response.status_code == 429:
-                retry_after = float(response.headers.get("Retry-After", 1.0))
-                get_rate_limiter().handle_retry_after("rest_api", retry_after)
-                raise RuntimeError(f"Rate limited, retry after {retry_after}s")
+        self.fee_accumulator += overpayment
 
-            return response
+        rebate = Decimal("0.00")
+        if self.fee_accumulator >= Decimal("0.01"):
+            cents = int(self.fee_accumulator // Decimal("0.01"))
+            rebate = Decimal(cents) * Decimal("0.01")
+            self.fee_accumulator -= rebate
 
-        return self._circuit_breaker.call(_do_request)
+        return {
+            "actual_value": actual_value,
+            "rounded_value": rounded_value,
+            "overpayment": overpayment,
+            "rebate": rebate,
+        }
 
     def place_order(
         self,
@@ -190,7 +105,7 @@ class ExecutionEngine:
         proposed_kelly: Decimal | None = None,
         final_wager: Decimal | None = None,
         signal_id: int | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict:
         if not ticker or not isinstance(ticker, str):
             raise ValueError(f"ticker must be a non-empty string, got: {ticker!r}")
         if not outcome_side or not isinstance(outcome_side, str):
@@ -202,7 +117,6 @@ class ExecutionEngine:
         if not isinstance(quantity, Decimal) or quantity <= Decimal("0"):
             raise ValueError(f"quantity must be a positive Decimal, got: {quantity!r}")
 
-        start_time = time.time()
         price_str = self.format_price(price)
         price = Decimal(price_str)
         qty_int = int(quantity.to_integral_value(rounding="ROUND_HALF_UP"))
@@ -213,21 +127,12 @@ class ExecutionEngine:
         outcome_side_lower = outcome_side.strip().lower()
         action_lower = action.strip().lower()
 
-        if outcome_side_lower == "yes":
-            book_side = "bid"
-            order_side = OrderSide.YES
-        elif outcome_side_lower == "no":
-            book_side = "ask"
-            order_side = OrderSide.NO
-        else:
+        if outcome_side_lower not in ("yes", "no"):
             raise ValueError(f"Invalid outcome_side: {outcome_side}. Must be 'yes' or 'no'.")
-
-        if action_lower == "buy":
-            order_action = OrderAction.BUY
-        elif action_lower == "sell":
-            order_action = OrderAction.SELL
-        else:
+        if action_lower not in ("buy", "sell"):
             raise ValueError(f"Invalid action: {action}. Must be 'buy' or 'sell'.")
+
+        book_side = "bid" if outcome_side_lower == "yes" else "ask"
 
         if order_exists(client_order_id) or has_active_order(
             ticker, outcome_side_lower, float(price), action_lower
@@ -261,17 +166,6 @@ class ExecutionEngine:
             signal_id=signal_id,
         )
 
-        order = self._order_machine.create_order(
-            ticker=ticker,
-            side=order_side,
-            action=order_action,
-            price=price,
-            quantity=quantity,
-            client_order_id=client_order_id,
-            time_in_force=time_in_force,
-            order_type=type_opts,
-        )
-
         payload = {
             "ticker": ticker,
             "action": action_lower,
@@ -285,16 +179,8 @@ class ExecutionEngine:
             "self_trade_prevention_type": "taker_at_cross",
         }
 
-        self._order_machine.transition(order.id, OrderState.SUBMITTED)
-
-        _effective_shadow = (
-            self._shadow_mode_override
-            if self._shadow_mode_override is not None
-            else Config.SHADOW_MODE
-        )
-
-        if _effective_shadow:
-            self.handle_order_fill(price, quantity, is_buy=(action_lower == "buy"))
+        if Config.SHADOW_MODE:
+            self._record_fill(price, quantity, is_buy=(action_lower == "buy"))
 
             _get_shadow_logger().info(
                 json.dumps(
@@ -305,10 +191,8 @@ class ExecutionEngine:
                         "price": price_str,
                         "quantity": qty_str,
                         "outcome_side": outcome_side_lower,
-                        "synthetic_ask": float(synthetic_ask)
-                        if synthetic_ask is not None
-                        else None,
-                        "fee_accumulator": float(self.fee_tracker.accumulator),
+                        "synthetic_ask": float(synthetic_ask) if synthetic_ask is not None else None,
+                        "fee_accumulator": float(self.fee_accumulator),
                     }
                 )
             )
@@ -323,19 +207,8 @@ class ExecutionEngine:
                 synthetic_ask=float(synthetic_ask) if synthetic_ask is not None else None,
                 proposed_kelly=float(proposed_kelly) if proposed_kelly is not None else None,
                 final_wager=float(final_wager) if final_wager is not None else None,
-                fee_accumulator=float(self.fee_tracker.accumulator),
+                fee_accumulator=float(self.fee_accumulator),
                 release_id=release_id,
-            )
-
-            self._order_machine.transition(order.id, OrderState.FILLED)
-            self._position_manager.on_order_fill(
-                ticker=ticker,
-                side=order_side,
-                action=order_action,
-                fill_qty=quantity,
-                fill_price=price,
-                fee=Decimal("0"),
-                rebate=Decimal("0"),
             )
 
             update_order_status(client_order_id, "filled")
@@ -347,9 +220,6 @@ class ExecutionEngine:
                 quantity=float(quantity),
                 client_order_id=client_order_id,
             )
-            record_shadow_trade(ticker, outcome_side_lower)
-            record_order_placed(ticker, outcome_side_lower, action_lower, "filled")
-            record_order_latency(ticker, outcome_side_lower, time.time() - start_time)
 
             logger.info(
                 f"[SHADOW MODE] Intercepted order for {ticker}. "
@@ -378,82 +248,43 @@ class ExecutionEngine:
             f"qty={qty_str} @ price={price_str} for {ticker}"
         )
 
-        try:
-            response = self._place_order_with_resilience(path, url, headers, payload)
+        session = Config.get_verified_session()
+        response = Config.request_with_retry(
+            method="POST",
+            url=url,
+            json=payload,
+            headers=headers,
+            session=session,
+            timeout=Config.REQUEST_TIMEOUT_SEC,
+        )
 
-            if response.status_code not in (200, 201):
-                error_msg = response.text
-                self._order_machine.transition(order.id, OrderState.REJECTED, error_msg)
-                record_order_rejected(ticker, outcome_side_lower, "api_error")
-                update_order_status(client_order_id, "rejected", error_message=error_msg)
-                _audit.log_order_rejected(
-                    ticker,
-                    action_lower,
-                    outcome_side_lower,
-                    reason=error_msg,
-                    client_order_id=client_order_id,
-                )
-                logger.error(f"Failed to place order: {error_msg}")
-                raise RuntimeError(f"API Error placing order: {error_msg}")
-
-            order_data = response.json()
-            kalshi_order_id = order_data.get("order_id")
-            order.kalshi_order_id = kalshi_order_id
-            order.api_status = order_data.get("status", "submitted")
-
-            if order.api_status == "filled":
-                self._order_machine.transition(order.id, OrderState.FILLED)
-                self._position_manager.on_order_fill(
-                    ticker=ticker,
-                    side=order_side,
-                    action=order_action,
-                    fill_qty=quantity,
-                    fill_price=price,
-                    fee=Decimal("0"),
-                    rebate=Decimal("0"),
-                )
-                update_order_status(client_order_id, "filled", kalshi_order_id=kalshi_order_id)
-            else:
-                update_order_status(
-                    client_order_id, order.api_status, kalshi_order_id=kalshi_order_id
-                )
-            _audit.log_order_placed(
+        if response.status_code not in (200, 201):
+            error_msg = response.text
+            update_order_status(client_order_id, "rejected", error_message=error_msg)
+            _audit.log_order_rejected(
                 ticker,
                 action_lower,
                 outcome_side_lower,
-                price=float(price),
-                quantity=float(quantity),
-                order_id=kalshi_order_id,
+                reason=error_msg,
                 client_order_id=client_order_id,
             )
-            record_order_placed(ticker, outcome_side_lower, action_lower, order.api_status)
-            record_order_latency(ticker, outcome_side_lower, time.time() - start_time)
+            logger.error(f"Failed to place order: {error_msg}")
+            raise RuntimeError(f"API Error placing order: {error_msg}")
 
-            logger.info(f"Order successfully placed: {kalshi_order_id}")
-            return order_data
+        order_data = response.json()
+        kalshi_order_id = order_data.get("order_id")
+        api_status = order_data.get("status", "submitted")
 
-        except Exception as e:
-            self._order_machine.transition(order.id, OrderState.REJECTED, str(e))
-            record_order_rejected(ticker, outcome_side_lower, "exception")
-            update_order_status(client_order_id, "failed", error_message=str(e))
-
-            self._dlq.add(payload, str(e))
-            logger.error(f"Order placement failed, added to DLQ: {e}")
-            raise
-
-    def handle_order_fill(
-        self, price: Decimal, quantity: Decimal, is_buy: bool = True
-    ) -> dict[str, Any]:
-        result = self.fee_tracker.record_fill(price, quantity, is_buy)
-        logger.info(
-            f"Processed fill of {quantity:.2f} contracts @ ${price:.4f}. "
-            f"Exact cost: ${result['actual_value']:.6f}, Rounded: ${result['rounded_value']:.2f}, "
-            f"Overpayment: ${result['overpayment']:.6f}, Rebate: ${result['rebate_received']:.2f}"
+        update_order_status(client_order_id, api_status, kalshi_order_id=kalshi_order_id)
+        _audit.log_order_placed(
+            ticker,
+            action_lower,
+            outcome_side_lower,
+            price=float(price),
+            quantity=float(quantity),
+            order_id=kalshi_order_id,
+            client_order_id=client_order_id,
         )
-        return result
 
-    def get_order_state_machine(self) -> OrderStateMachine:
-        return self._order_machine
-
-    def get_position_manager(self) -> Any:
-        return self._position_manager
+        logger.info(f"Order successfully placed: {kalshi_order_id}")
+        return order_data

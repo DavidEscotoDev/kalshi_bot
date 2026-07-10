@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from abc import ABC, abstractmethod
 from decimal import Decimal
 from typing import Any
 
@@ -10,19 +9,7 @@ from config import Config
 logger = logging.getLogger("kalshi_bot.forecast")
 
 
-class EconomicDataProvider(ABC):
-    @abstractmethod
-    def fetch_latest_observation(self, indicator: str) -> dict[str, Any]:
-        pass
-
-
-class ForecastProvider(ABC):
-    @abstractmethod
-    def get_forecast(self, indicator: str, series_id: str, **kwargs: Any) -> float | None:
-        raise NotImplementedError
-
-
-class FredSurveyForecastProvider(ForecastProvider):
+class FredSurveyForecastProvider:
     SURVEY_MAPPING = {
         "CPI": "MICH",
         "PCE": "PCEPILFE",
@@ -60,14 +47,14 @@ class FredSurveyForecastProvider(ForecastProvider):
                 obs = data.get("observations", [])
                 if obs:
                     val = obs[0].get("value", "")
-                    if val.strip() not in ("", ".", ".", "NaN"):
+                    if val.strip() not in ("", ".", "NaN"):
                         return float(val)
         except Exception as e:
             logger.warning(f"Failed to fetch FRED survey series {series_id}: {e}")
         return None
 
 
-class TrailingAverageForecastProvider(ForecastProvider):
+class TrailingAverageForecastProvider:
     def __init__(self, window: int = 6):
         self.window = window
 
@@ -81,7 +68,7 @@ class TrailingAverageForecastProvider(ForecastProvider):
         return recent_values[-1] + avg_change
 
 
-class AlphaVantageEconomicProvider(EconomicDataProvider):
+class AlphaVantageEconomicProvider:
     SERIES_MAPPING = {
         "CPI": "CPI",
         "PCE": "PCE",

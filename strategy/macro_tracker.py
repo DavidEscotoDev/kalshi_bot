@@ -9,7 +9,6 @@ from typing import Any
 from config import Config
 from data.database import get_connection, log_release, log_strategy_signal
 from execution.engine import ExecutionEngine
-from execution.position_manager import get_position_manager
 from market.order_book import LocalOrderBook
 from safety.risk_manager import RiskManager
 from strategy.forecast_provider import (
@@ -213,70 +212,6 @@ def _evaluate_and_place(
     }
 
 
-class CalendarProvider:
-    @staticmethod
-    def trigger_mock_release(
-        indicator: str,
-        actual: float,
-        forecast: float,
-        previous: float,
-        ticker: str,
-        sector: str,
-        risk_manager: RiskManager,
-        execution_engine: ExecutionEngine,
-        order_book: LocalOrderBook,
-        total_capital: Decimal,
-        surprise_std: float = 1.0,
-        current_sector_exposure: Decimal = Decimal("0.00"),
-    ) -> dict[str, Any]:
-        return _evaluate_and_place(
-            indicator=indicator,
-            actual=actual,
-            forecast=forecast,
-            previous=previous,
-            ticker=ticker,
-            sector=sector,
-            risk_manager=risk_manager,
-            execution_engine=execution_engine,
-            order_book=order_book,
-            total_capital=total_capital,
-            surprise_std=surprise_std,
-            current_sector_exposure=current_sector_exposure,
-        )
-
-
-class MockCalendarProvider(CalendarProvider):
-    @staticmethod
-    def trigger_mock_release(
-        indicator: str,
-        actual: float,
-        forecast: float,
-        previous: float,
-        ticker: str,
-        sector: str,
-        risk_manager: RiskManager,
-        execution_engine: ExecutionEngine,
-        order_book: LocalOrderBook,
-        total_capital: Decimal,
-        surprise_std: float = 1.0,
-        current_sector_exposure: Decimal = Decimal("0.00"),
-    ) -> dict[str, Any]:
-        return _evaluate_and_place(
-            indicator=indicator,
-            actual=actual,
-            forecast=forecast,
-            previous=previous,
-            ticker=ticker,
-            sector=sector,
-            risk_manager=risk_manager,
-            execution_engine=execution_engine,
-            order_book=order_book,
-            total_capital=total_capital,
-            surprise_std=surprise_std,
-            current_sector_exposure=current_sector_exposure,
-        )
-
-
 class FredCalendarProvider:
     SERIES_MAPPING = {"CPI": "CPIAUCSL", "FOMC": "FEDFUNDS", "PCE": "PCE"}
 
@@ -378,7 +313,6 @@ class MacroTrackerStrategy:
         self.risk_manager = RiskManager()
         self.execution_engine = ExecutionEngine()
         self.order_book = LocalOrderBook()
-        self.position_manager = get_position_manager()
         self._ticker_to_sector: dict[str, str] = {}
         self._last_trade_time: dict[str, float] = {}
 
@@ -465,7 +399,6 @@ class MacroTrackerStrategy:
     ) -> bool:
         now = time.time()
 
-        # Check cooldown: skip if any indicator was traded recently
         for ind in self.indicators:
             last = self._last_trade_time.get(ind, 0.0)
             if now - last < Config.TRADE_COOLDOWN_SEC:
@@ -473,7 +406,6 @@ class MacroTrackerStrategy:
                 logger.info(f"Cooldown active for {ind}: {remaining:.0f}s remaining. Skipping.")
                 return False
 
-        # Collect signals from all watched indicators
         signals = {}
         for ind in self.indicators:
             sig = self._compute_signal(ind)
@@ -483,7 +415,6 @@ class MacroTrackerStrategy:
         if not signals:
             return False
 
-        # Multi-indicator consensus: all must agree on direction
         if len(signals) > 1:
             sides = {ind: s["side"] for ind, s in signals.items()}
             unique_sides = set(sides.values())
@@ -495,16 +426,13 @@ class MacroTrackerStrategy:
                 f"agree on {unique_sides.pop()}"
             )
 
-        # Use the first signal for the actual trade
         lead_indicator = self.indicator if self.indicator in signals else next(iter(signals))
         sig = signals[lead_indicator]
 
         if current_sector_exposure is None:
-            current_sector_exposure = self.position_manager.get_sector_exposure(
-                self.sector, self._ticker_to_sector
-            )
+            current_sector_exposure = Decimal("0.00")
 
-        result = CalendarProvider.trigger_mock_release(
+        result = _evaluate_and_place(
             indicator=sig["indicator"],
             actual=sig["actual"],
             forecast=sig["forecast"],

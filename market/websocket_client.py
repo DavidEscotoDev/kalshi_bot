@@ -14,16 +14,6 @@ from websocket import WebSocketApp
 
 from config import Config
 from market.order_book import LocalOrderBook
-from observability.metrics import (
-    record_ws_latency,
-    record_ws_message_received,
-    record_ws_message_sent,
-    record_ws_reconnection,
-    record_ws_sequence_gap,
-    update_ws_connection_count,
-    update_ws_last_message_time,
-)
-from resilience.circuit_breaker import CircuitBreakerConfig, CircuitBreakerRegistry
 
 logger = logging.getLogger("kalshi_bot.websocket")
 
@@ -49,12 +39,7 @@ class KalshiWebSocketClient:
         self.connected_event = threading.Event()
         self._sequence = 0
         self._last_sequence = 0
-        self._last_message_time = 0.0
         self._last_ping_sent = 0.0
-
-        self._circuit_breaker = CircuitBreakerRegistry().get_or_create(
-            "websocket", CircuitBreakerConfig(failure_threshold=3, timeout_seconds=60.0)
-        )
 
     def _get_auth_headers(self) -> list[str]:
         timestamp = str(int(time.time() * 1000))
@@ -89,10 +74,10 @@ class KalshiWebSocketClient:
         self.ws = WebSocketApp(
             self.ws_url,
             header=headers,
-            on_open=self._on_open,  # type: ignore[arg-type]
-            on_message=self._on_message,  # type: ignore[arg-type]
-            on_error=self._on_error,  # type: ignore[arg-type]
-            on_close=self._on_close,  # type: ignore[arg-type]
+            on_open=self._on_open,
+            on_message=self._on_message,
+            on_error=self._on_error,
+            on_close=self._on_close,
         )
 
     def wait_for_connection(self, timeout: float = 10.0) -> bool:
@@ -108,7 +93,6 @@ class KalshiWebSocketClient:
             if not self.stop_event.is_set():
                 logger.info("Reconnecting WebSocket in 5 seconds...")
                 time.sleep(5)
-                record_ws_reconnection()
                 self._recreate_ws()
 
     def disconnect(self) -> None:
@@ -118,12 +102,10 @@ class KalshiWebSocketClient:
             self.ws.close()
         if self.thread:
             self.thread.join(timeout=2.0)
-        update_ws_connection_count(0)
 
     def _on_open(self, ws: WebSocketApp) -> None:
         logger.info("WebSocket connection established. Subscribing...")
         self.connected_event.set()
-        update_ws_connection_count(1)
         self.order_book.clear()
 
         sub_snapshot = {
@@ -138,25 +120,16 @@ class KalshiWebSocketClient:
             "params": {"channels": ["orderbook_delta"], "market_ticker": self.ticker},
         }
         ws.send(json.dumps(sub_delta))
-        record_ws_message_sent("subscribe")
         logger.info(f"Subscription messages sent for {self.ticker}")
 
     def _on_message(self, ws: WebSocketApp, message_str: str) -> None:
         try:
-            now = time.time()
-            self._last_message_time = now
-            update_ws_last_message_time(now)
-            if self._last_ping_sent > 0:
-                record_ws_latency(now - self._last_ping_sent)
-
             if len(message_str) > _MAX_SNAPSHOT_SIZE:
                 logger.warning(f"Discarding oversized WebSocket message ({len(message_str)} bytes)")
                 return
 
             msg = json.loads(message_str)
             msg_type = msg.get("type")
-
-            record_ws_message_received(msg_type or "unknown")
 
             if msg_type == "orderbook_snapshot":
                 msg_content = msg.get("msg", {})
@@ -179,7 +152,6 @@ class KalshiWebSocketClient:
                 if self._last_sequence > 0 and self._sequence > self._last_sequence + 1:
                     gap = self._sequence - self._last_sequence - 1
                     logger.warning(f"WebSocket sequence gap detected: {gap} messages missed")
-                    record_ws_sequence_gap()
                 self._last_sequence = self._sequence
 
                 side = msg_content.get("side", "")
@@ -202,7 +174,6 @@ class KalshiWebSocketClient:
                 logger.info(f"Successfully unsubscribed: {msg}")
             elif msg_type == "error":
                 logger.error(f"WebSocket server returned error: {msg}")
-                self._circuit_breaker.record_failure()
             else:
                 logger.debug(f"Received unknown message type: {msg_type}")
         except json.JSONDecodeError as e:
@@ -217,11 +188,9 @@ class KalshiWebSocketClient:
             "If this is a 403/401, verify the API key, private key, and KALSHI_ENV settings.",
             message,
         )
-        self._circuit_breaker.record_failure()
 
     def _on_close(
         self, ws: WebSocketApp, close_status_code: int | None, close_msg: str | None
     ) -> None:
         logger.info(f"WebSocket connection closed. status={close_status_code}, msg={close_msg}")
         self.connected_event.clear()
-        update_ws_connection_count(0)
