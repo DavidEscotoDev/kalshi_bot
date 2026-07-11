@@ -284,6 +284,6 @@ MIT License — see [LICENSE](LICENSE) for details.
 ## 🙋 Author
 
 **David Escoto** — Backend Engineer | Production Systems | AI Agent Infrastructure  
-[LinkedIn](https://linkedin.com/in/yourprofile) • [Portfolio](https://yourportfolio.com) • [GitHub](https://github.com/DavidEscotoDev)
+[LinkedIn](https://www.linkedin.com/in/david-escoto-estrada-1ab5633b9/) • [Portfolio](https://yourportfolio.com) • [GitHub](https://github.com/DavidEscotoDev)
 
 > *Built to demonstrate production-grade safety patterns for autonomous systems. Not financial advice.*
