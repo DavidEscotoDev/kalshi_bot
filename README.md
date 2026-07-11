@@ -28,29 +28,29 @@ This isn't a toy trading bot. It's a **production safety-case study** demonstrat
 ## 🏗️ Architecture
 
 ```mermaid
-flowchart TB
-    subgraph MAIN[MAIN LOOP (main.py)]
-        KS[KillSwitch<br/>• Balance monitor<br/>• Cancel all orders]
-        RM[RiskManager<br/>• Kelly ¼×<br/>• VaR 2%<br/>• Sector 30%]
-        MTS[MacroTrackerStrategy<br/>• FRED macro data<br/>• CPI/Fed signals<br/>• Conviction scoring]
+graph TB
+    subgraph MAIN["MAIN LOOP (main.py)"]
+        KS["KillSwitch<br/>• Balance monitor<br/>• Cancel all orders"]
+        RM["RiskManager<br/>• Kelly ¼×<br/>• VaR 2%<br/>• Sector 30%"]
+        MTS["MacroTrackerStrategy<br/>• FRED macro data<br/>• CPI/Fed signals<br/>• Conviction scoring"]
     end
 
-    WS[KalshiWebSocketClient<br/>• Auto-reconnect with backoff<br/>• Order book sync<br/>• Sequence gap detection<br/>• Heartbeat/ping]
+    WS["KalshiWebSocketClient<br/>• Auto-reconnect with backoff<br/>• Order book sync<br/>• Sequence gap detection<br/>• Heartbeat/ping"]
 
-    subgraph EXEC[Execution Engine]
-        EE[ExecutionEngine<br/>• Shadow + Live paths<br/>• Duplicate detection<br/>• Fee accumulator<br/>• Audit logging]
+    subgraph EXEC["Execution Engine"]
+        EE["ExecutionEngine<br/>• Shadow + Live paths<br/>• Duplicate detection<br/>• Fee accumulator<br/>• Audit logging"]
     end
 
-    subgraph STORAGE[Persistence Layer]
-        SQL[(SQLite<br/>orders, positions,<br/>balance, shadow_trades)]
-        SLOG[Shadow Logs<br/>shadow_trades.log<br/>JSONL format]
-        ALOG[Audit Log<br/>immutable events<br/>JSONL daily files]
+    subgraph STORAGE["Persistence Layer"]
+        SQL[("SQLite<br/>orders, positions,<br/>balance, shadow_trades")]
+        SLOG["Shadow Logs<br/>shadow_trades.log<br/>JSONL format"]
+        ALOG["Audit Log<br/>immutable events<br/>JSONL daily files"]
     end
 
-    MAIN -->|balance check<br/>risk sizing<br/>strategy signal| WS
-    WS -->|order book updates| MAIN
-    MAIN -->|place_order| EE
-    EE -->|shadow: log only<br/>live: REST API| KALSHI[(Kalshi API)]
+    MAIN_LOOP["Main Loop<br/>Iteration"] -->|balance check<br/>risk sizing<br/>strategy signal| WS
+    WS -->|order book updates| MAIN_LOOP
+    MAIN_LOOP -->|place_order| EE
+    EE -->|shadow: log only<br/>live: REST API| KALSHI[("Kalshi API")]
     EE --> SQL
     EE --> SLOG
     EE --> ALOG
