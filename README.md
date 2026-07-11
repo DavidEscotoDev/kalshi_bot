@@ -1,4 +1,4 @@
-# 🤖 Kalshi Trading Bot
+# Kalshi Trading Bot
 
 **Production-grade autonomous trading bot for Kalshi prediction markets** — Built with safety-first architecture, kill switches, circuit breakers, and full observability.
 
@@ -10,7 +10,7 @@
 
 ---
 
-## 🎯 Why This Project Matters
+## Why This Project Matters
 
 This isn't a toy trading bot. It's a **production safety-case study** demonstrating how to build autonomous systems that handle real money without blowing up:
 
@@ -25,7 +25,7 @@ This isn't a toy trading bot. It's a **production safety-case study** demonstrat
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```mermaid
 graph TB
@@ -61,7 +61,7 @@ graph TB
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 - Python 3.11+
@@ -141,7 +141,7 @@ Full list → [config.py](config.py)
 
 ---
 
-## 🛡️ Safety Features Deep Dive
+## Safety Features Deep Dive
 
 ### Kill Switch (`safety/kill_switch.py`)
 - **Triggers on**: Balance < `$KILL_SWITCH_MIN_BALANCE` (default $100) OR API failure to fetch balance
@@ -189,7 +189,7 @@ final = min(final, sector_remaining)
 
 ---
 
-## 📊 Key Metrics (Shadow Mode Validation — June 2026)
+## Key Metrics (Shadow Mode Validation — June 2026)
 
 | Metric | Target | Observed (7-day window) |
 |--------|--------|------------------------|
@@ -206,7 +206,7 @@ final = min(final, sector_remaining)
 
 ---
 
-## 🧪 Testing
+## Testing
 
 ```bash
 # Run tests with coverage
@@ -221,7 +221,7 @@ mypy .
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 kalshi_bot/
@@ -258,7 +258,7 @@ kalshi_bot/
 
 ---
 
-## 📚 Documentation
+## Documentation
 
 | Doc | Purpose |
 |-----|---------|
@@ -269,19 +269,19 @@ kalshi_bot/
 
 ---
 
-## 🔗 Related Projects
+## Related Projects
 
 - **Agent Orchestration Framework** — Multi-agent coordination with same safety patterns (kill switches, circuit breakers, distributed tracing) → *[repo link]*
 
 ---
 
-## 📄 License
+## License
 
 MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
-## 🙋 Author
+## Author
 
 **David Escoto** — Backend Engineer | Production Systems | AI Agent Infrastructure  
 [LinkedIn](https://www.linkedin.com/in/david-escoto-estrada-1ab5633b9/) • [Portfolio](https://yourportfolio.com) • [GitHub](https://github.com/DavidEscotoDev)
