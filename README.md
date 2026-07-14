@@ -1,18 +1,20 @@
 # Kalshi Trading Bot
 
-**Production-grade autonomous trading bot for Kalshi prediction markets** — Built with safety-first architecture, kill switches, circuit breakers, and full observability.
-
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?style=flat-square&logo=python)](https://python.org)
-[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg?style=flat-square)](https://github.com/psf/black)
-[![CI](https://img.shields.io/badge/CI-Passing-brightgreen?style=flat-square&logo=github-actions)](https://github.com/DavidEscotoDev/kalshi_bot/actions)
-[![Coverage](https://img.shields.io/badge/Coverage-85%25%2B-brightgreen?style=flat-square)](https://github.com/DavidEscotoDev/kalshi_bot/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
+[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg?style=flat-square)](https://github.com/astral-sh/ruff)
+[![CI](https://github.com/DavidEscotoDev/kalshi_bot/actions/workflows/ci.yml/badge.svg)](https://github.com/DavidEscotoDev/kalshi_bot/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/DavidEscotoDev/coverage-badge/raw/main/kalshi_bot.json)](https://github.com/DavidEscotoDev/kalshi_bot/actions/workflows/ci.yml)
+
+**TL;DR** — Production-grade autonomous trading bot for Kalshi prediction markets. Safety-first architecture: kill switches, circuit breakers, fractional Kelly sizing, shadow-mode validation. Built to demonstrate how autonomous systems handle real money without blowing up.
+
+![Architecture](docs/architecture.png)  <!-- TODO: Add architecture diagram screenshot -->
 
 ---
 
 ## Why This Project Matters
 
-This isn't a toy trading bot. It's a **production safety-case study** demonstrating how to build autonomous systems that handle real money without blowing up:
+This isn't a toy trading bot. It's a **production safety case study** demonstrating how to build autonomous systems that handle real money:
 
 | Safety Layer | Implementation | Fail Behavior |
 |--------------|----------------|---------------|
@@ -61,56 +63,27 @@ graph TB
 
 ---
 
-## Quick Start
+## Quick Start (≤5 commands)
 
-### Prerequisites
-- Python 3.11+
-- Kalshi API credentials (demo or prod)
-- RSA private key (PEM, 0600 permissions)
-
-### 1. Clone & Install
 ```bash
 git clone https://github.com/DavidEscotoDev/kalshi_bot.git
 cd kalshi_bot
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-### 2. Configure
-```bash
-cp .env.example .env
-# Edit .env with your credentials:
-# KALSHI_API_KEY_ID=your_key_id
-# KALSHI_PRIVATE_KEY_PATH=~/.kalshi/private_key.pem
-# KALSHI_ENV=demo          # or 'prod'
-# SHADOW_MODE=True         # START HERE - never go live first
-```
-
-### 3. Run Shadow Mode (Safe Validation)
-```bash
-python main.py
+cp .env.example .env  # Add KALSHI_API_KEY_ID, KALSHI_PRIVATE_KEY_PATH, FRED_API_KEY
+python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+python main.py  # Runs in SHADOW_MODE=True by default
 # Watch logs/kalshi_bot.log for simulated trades
-# Verify strategy logic, risk limits, WS stability
-```
-
-### 4. Go Live (After Validation)
-```bash
-# In .env:
-SHADOW_MODE=False
-LIVE_TRADE_CONFIRMED=1   # Explicit confirmation required
-# Then restart
-```
-
-### Docker (Recommended for Prod)
-```bash
-docker-compose up -d
-# Logs: docker-compose logs -f
-# Health: docker-compose ps
 ```
 
 ---
 
-## ⚙️ Configuration
+## What I Learned
+
+- **Fail-closed safety design**: Kill switch triggers on balance fetch failure (assumes worst case), circuit breaker state machine prevents cascade failures, shadow mode validates entire pipeline before live traffic
+- **Observable autonomous systems**: Structured JSONL audit trail + SQLite for replay, Prometheus-ready metrics, rotating file logs with correlation IDs — every decision traceable for forensics
+
+---
+
+## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -135,7 +108,7 @@ docker-compose up -d
 | `MIN_CONVICTION_SIGMA` | `1.0` | Min z-score for conviction |
 | `MAX_SPREAD_PCT` | `0.05` | Max bid-ask spread to trade |
 | `ALPHA_VANTAGE_API_KEY` | `""` | Optional: alt data source |
-| `FRED_API_KEY` | `""` | Required: macro data from FRED |
+| `FRED_API_KEY` | `""` | **Required**: macro data from FRED |
 
 Full list → [config.py](config.py)
 
@@ -271,7 +244,7 @@ kalshi_bot/
 
 ## Related Projects
 
-- **Agent Orchestration Framework** — Multi-agent coordination with same safety patterns (kill switches, circuit breakers, distributed tracing) → *[repo link]*
+- **Agent Orchestration Framework** — Multi-agent coordination with same safety patterns (kill switches, circuit breakers, distributed tracing) → [github.com/DavidEscotoDev/coding-agent-framework](https://github.com/DavidEscotoDev/coding-agent-framework)
 
 ---
 
@@ -284,6 +257,6 @@ MIT License — see [LICENSE](LICENSE) for details.
 ## Author
 
 **David Escoto** — Backend Engineer | Production Systems | AI Agent Infrastructure  
-[LinkedIn](https://www.linkedin.com/in/david-escoto-estrada-1ab5633b9/) • [Portfolio](https://yourportfolio.com) • [GitHub](https://github.com/DavidEscotoDev)
+[LinkedIn](https://www.linkedin.com/in/david-escoto-estrada-1ab5633b9/) • [GitHub](https://github.com/DavidEscotoDev)
 
 > *Built to demonstrate production-grade safety patterns for autonomous systems. Not financial advice.*
