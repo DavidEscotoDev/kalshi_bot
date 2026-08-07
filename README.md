@@ -3,6 +3,9 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?style=flat-square&logo=python)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg?style=flat-square)](https://github.com/astral-sh/ruff)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white)]
+[![Prometheus](https://img.shields.io/badge/Prometheus-E6522C?logo=prometheus&logoColor=white)]
+[![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)]
 [![CI](https://github.com/DavidEscotoDev/kalshi_bot/actions/workflows/ci.yml/badge.svg)](https://github.com/DavidEscotoDev/kalshi_bot/actions/workflows/ci.yml)
 
 **TL;DR** — Production-grade autonomous trading bot for Kalshi prediction markets. Safety-first architecture: kill switches, circuit breakers, fractional Kelly sizing, shadow-mode validation. Built to demonstrate how autonomous systems handle real money without blowing up.
